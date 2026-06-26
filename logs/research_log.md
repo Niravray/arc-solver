@@ -169,3 +169,7 @@ Next Layers:
 * Object extraction operational
 * Ready to begin symbolic reasoning over extracted objects
 
+## Task observations — June 2026
+
+Task 00576224: tiling rule — input pattern tiled NxN times to fill output
+Task 2: masking rule — output shape filled with input pattern
