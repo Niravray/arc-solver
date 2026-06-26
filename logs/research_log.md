@@ -173,3 +173,25 @@ Next Layers:
 
 Task 00576224: tiling rule — input pattern tiled NxN times to fill output
 Task 2: masking rule — output shape filled with input pattern
+## Session — June 26, 2026
+
+### What we did today
+- Ran visualizer.py — first ARC tasks seen as colored grids
+- Manually solved 3 tasks by eye:
+  - Task 00576224: tiling rule — 2x2 pattern tiled to fill 6x6 output
+  - Task 007bbfb7: pattern fill — shape filled with another object's pattern
+  - Task 009d5c81: color indicator — small object recolors large object then disappears
+- Ran object_extractor.py — 5/5 tasks passed
+- Ran property_encoder.py — working
+- Discussed DSL framing — our primitive library IS the domain specific language
+- Discussed convolution/line buffer techniques — applicable in software for pattern detection
+- Decision: build baseline first with 20-30 primitives, get a real Kaggle score, then iterate
+
+### Key insight today
+The same rule type (color indicator) appeared in multiple tasks. This means every primitive we build solves multiple tasks at once. Coverage compounds.
+
+### Pipeline status today
+- L1 Task Loader ✅
+- L2 Object Extractor ✅
+- L3 Property Encoder ✅
+- L4 Relationship Graph — building next
