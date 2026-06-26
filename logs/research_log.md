@@ -71,3 +71,101 @@
 * Development environment configured
 * Visualization layer under construction
 * Ready to begin systematic analysis of ARC task patterns
+
+# ARC Solver Research Log
+
+## June 16, 2026
+
+### What I built today
+
+* Initialized Git repository and pushed project to GitHub
+* Built object_extractor.py as the next layer of the ARC solver pipeline
+* Implemented background color detection
+* Implemented connected-component object extraction
+* Added object metadata generation:
+
+  * position
+  * dimensions
+  * bounding boxes
+  * centroids
+  * object grids
+* Added support for multiple object interpretation strategies
+* Organized project into reusable pipeline components
+
+### Object Extraction Strategies Implemented
+
+1. connected_4
+
+   * Standard horizontal/vertical connectivity
+
+2. connected_8
+
+   * Includes diagonal connections
+
+3. by_color
+
+   * Treats all pixels of the same color as one object
+
+4. no_background
+
+   * Extracts objects without removing background color
+
+### What I learned
+
+* ARC objects are not always uniquely defined
+* Different tasks require different notions of "object"
+* Connected-component analysis is a foundational ARC primitive
+* Background color is usually the most frequent color but not always conceptually irrelevant
+* Multiple competing interpretations must often be maintained simultaneously
+
+### Research Insight
+
+A major challenge in ARC is representation.
+
+Before solving a task, the system must decide:
+
+* What counts as an object?
+* Which pixels belong together?
+* Which color is background?
+* Whether diagonally touching pixels form one object or multiple objects
+
+Different answers can lead to completely different solutions.
+
+### Decisions Made
+
+* Use multiple object extraction strategies in parallel
+* Preserve alternative interpretations rather than committing early
+* Store rich object metadata for future reasoning
+* Continue building solver primitives before attempting full task solving
+
+### Current Solver Pipeline
+
+Layer 1:
+
+* Dataset loading ✔
+
+Layer 2:
+
+* Visualization ✔
+
+Layer 3:
+
+* Object extraction ✔
+
+Next Layers:
+
+* Object property analysis
+* Transformation primitives
+* Hypothesis generation
+* Program search
+* Solution verification
+
+### Current Project Status
+
+* Environment stable
+* GitHub repository active
+* Dataset operational
+* Visualization operational
+* Object extraction operational
+* Ready to begin symbolic reasoning over extracted objects
+
