@@ -187,7 +187,7 @@ if __name__ == "__main__":
     print("Close each window to see the next one.")
 
     # Show the first 3 tasks
-    for i in range(3):
+    for i in range(100):
         task_id = ids[i]
         task = tasks[task_id]
         print(f"\nShowing task {i+1}: {task_id}")
