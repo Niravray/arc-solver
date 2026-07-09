@@ -195,6 +195,140 @@ def scale_up_rows_cols(grid, row_factor, col_factor):
 
 
 # ============================================================
+# OBJECT SELECTION PREDICATES
+#
+# These are NOT grid-in/grid-out primitives, so they intentionally
+# don't live in ALL_PRIMITIVES (the verifier expects every entry
+# there to take a grid and return a grid). Instead these take a
+# list of object dicts -- the same dicts property_encoder.py
+# produces -- and return a single object, a filtered list, or a
+# bool.
+#
+# Two things use these:
+#   1. Primitives below (recolor_largest, color_indicator_rule,
+#      etc.) that used to hand-roll their own min()/max() selection.
+#   2. The hypothesis engine (L8), which can call these directly to
+#      target a specific object -- e.g. recolor_object(grid,
+#      leftmost_object(objects), 3) -- instead of brute-forcing
+#      every object in `objects` as a candidate for every
+#      obj-taking primitive.
+#
+# TIE-BREAKING: when multiple objects are equally "largest",
+# "topmost", etc., ties are broken by lowest object id. This
+# assumes ids are assigned in scipy.ndimage.label's default
+# raster-scan order (top-to-bottom, left-to-right) -- I haven't
+# seen object_extractor.py, so I can't confirm that's how your
+# ids are actually assigned. If it's different, "lowest id" stops
+# meaning "reading order" and every tie-break below silently
+# picks something else. Worth confirming before trusting this on
+# an ambiguous task.
+# ============================================================
+
+def _break_tie(candidates):
+    """
+    Deterministically resolve ties among equally-ranked objects by
+    returning the one with the lowest id. See module note above on
+    what "lowest id" is assumed to mean.
+    """
+    return min(candidates, key=lambda o: o["id"])
+
+
+def largest_object(objects):
+    """Return the object with the most pixels, or None if objects is empty."""
+    if not objects:
+        return None
+    max_count = max(o["pixel_count"] for o in objects)
+    candidates = [o for o in objects if o["pixel_count"] == max_count]
+    return _break_tie(candidates)
+
+
+def smallest_object(objects):
+    """Return the object with the fewest pixels, or None if objects is empty."""
+    if not objects:
+        return None
+    min_count = min(o["pixel_count"] for o in objects)
+    candidates = [o for o in objects if o["pixel_count"] == min_count]
+    return _break_tie(candidates)
+
+
+def leftmost_object(objects):
+    """Return the object whose bounding box starts at the smallest column."""
+    if not objects:
+        return None
+    min_col = min(o["min_col"] for o in objects)
+    candidates = [o for o in objects if o["min_col"] == min_col]
+    return _break_tie(candidates)
+
+
+def rightmost_object(objects):
+    """Return the object whose bounding box extends to the largest column."""
+    if not objects:
+        return None
+    max_col = max(o["max_col"] for o in objects)
+    candidates = [o for o in objects if o["max_col"] == max_col]
+    return _break_tie(candidates)
+
+
+def topmost_object(objects):
+    """Return the object whose bounding box starts at the smallest row."""
+    if not objects:
+        return None
+    min_row = min(o["min_row"] for o in objects)
+    candidates = [o for o in objects if o["min_row"] == min_row]
+    return _break_tie(candidates)
+
+
+def bottommost_object(objects):
+    """Return the object whose bounding box extends to the largest row."""
+    if not objects:
+        return None
+    max_row = max(o["max_row"] for o in objects)
+    candidates = [o for o in objects if o["max_row"] == max_row]
+    return _break_tie(candidates)
+
+
+def touches_border(obj, grid_shape):
+    """
+    True if obj's bounding box touches any edge of a (rows, cols)
+    grid_shape.
+    """
+    rows, cols = grid_shape
+    return (
+        obj["min_row"] == 0 or
+        obj["max_row"] == rows - 1 or
+        obj["min_col"] == 0 or
+        obj["max_col"] == cols - 1
+    )
+
+
+def objects_touching_border(objects, grid_shape):
+    """Return the subset of objects touching the grid border."""
+    return [o for o in objects if touches_border(o, grid_shape)]
+
+
+def objects_not_touching_border(objects, grid_shape):
+    """Return the subset of objects NOT touching the grid border."""
+    return [o for o in objects if not touches_border(o, grid_shape)]
+
+
+def unique_color_object(objects):
+    """
+    Return the one object whose color no other object shares.
+    Returns None if there isn't exactly one such object (e.g. every
+    color is unique, or every color is shared by 2+ objects).
+    """
+    if not objects:
+        return None
+    color_counts = {}
+    for o in objects:
+        color_counts[o["color"]] = color_counts.get(o["color"], 0) + 1
+    unique = [o for o in objects if color_counts[o["color"]] == 1]
+    if len(unique) == 1:
+        return unique[0]
+    return None
+
+
+# ============================================================
 # COLOR PRIMITIVES
 # ============================================================
 
@@ -267,21 +401,25 @@ def recolor_by_size(grid, objects, size_to_color):
 def recolor_largest(grid, objects, new_color):
     """
     Recolor the largest object (by pixel count) to new_color.
+    Uses largest_object() so ties are broken deterministically
+    instead of depending on the order `objects` happens to be in.
     """
-    if not objects:
+    obj = largest_object(objects)
+    if obj is None:
         return grid
-    largest = max(objects, key=lambda o: o["pixel_count"])
-    return recolor_object(grid, largest, new_color)
+    return recolor_object(grid, obj, new_color)
 
 
 def recolor_smallest(grid, objects, new_color):
     """
     Recolor the smallest object (by pixel count) to new_color.
+    Uses smallest_object() so ties are broken deterministically
+    instead of depending on the order `objects` happens to be in.
     """
-    if not objects:
+    obj = smallest_object(objects)
+    if obj is None:
         return grid
-    smallest = min(objects, key=lambda o: o["pixel_count"])
-    return recolor_object(grid, smallest, new_color)
+    return recolor_object(grid, obj, new_color)
 
 
 def remove_object(grid, obj, background=0):
@@ -307,11 +445,13 @@ def remove_smallest(grid, objects, background=0):
     """
     Remove the smallest object from the grid.
     This is the primitive for the color indicator rule.
+    Uses smallest_object() so ties are broken deterministically
+    instead of depending on the order `objects` happens to be in.
     """
-    if not objects:
+    obj = smallest_object(objects)
+    if obj is None:
         return grid
-    smallest = min(objects, key=lambda o: o["pixel_count"])
-    return remove_object(grid, smallest, background)
+    return remove_object(grid, obj, background)
 
 
 def color_indicator_rule(grid, objects, background=0):
@@ -322,14 +462,24 @@ def color_indicator_rule(grid, objects, background=0):
     3. Remove the indicator
 
     This solves task 009d5c81 and similar tasks.
+
+    Uses smallest_object()/largest_object() instead of raw
+    min()/max() over `objects`. This is the fix for "picks the
+    wrong object when multiple same-color objects exist" -- the
+    old min()/max() returned whichever tied object happened to
+    come first in the `objects` list, which is arbitrary. This
+    version always resolves ties the same way regardless of list
+    order. Verify against the task that originally exposed the bug
+    before calling it closed -- see the test script for a
+    reproduction of the failure mode this fixes.
     """
     if len(objects) < 2:
         return None
 
-    smallest = min(objects, key=lambda o: o["pixel_count"])
-    largest  = max(objects, key=lambda o: o["pixel_count"])
+    smallest = smallest_object(objects)
+    largest = largest_object(objects)
 
-    if smallest["id"] == largest["id"]:
+    if smallest is None or largest is None or smallest["id"] == largest["id"]:
         return None  # same object
 
     indicator_color = smallest["color"]
@@ -376,6 +526,13 @@ def apply_tiling_rule(input_grid, output_grid):
 # PRIMITIVE REGISTRY
 # A dict mapping primitive name to function
 # Used by the hypothesis engine to look up and apply primitives
+#
+# NOTE: apply_tiling_rule() is intentionally NOT registered here.
+# It takes output_grid as a parameter, which doesn't exist at test
+# time -- it's a checker ("is this the tiled answer?"), not a
+# blind hypothesis generator. The tile_* entries below already
+# cover tiling as a generator; apply_tiling_rule stays a plain
+# helper function, unregistered, same as before.
 # ============================================================
 
 SPATIAL_PRIMITIVES = {
@@ -397,10 +554,39 @@ SPATIAL_PRIMITIVES = {
     "scale_up_2":          lambda grid, **kw: scale_up(grid, 2),
     "scale_up_3":          lambda grid, **kw: scale_up(grid, 3),
     "crop_to_content":     lambda grid, **kw: crop_to_content(grid),
+
+    # --- newly registered below (pre-existing functions, unchanged bodies) ---
+    "tile_to_size":        lambda grid, target_rows=None, target_cols=None, **kw: (
+                               tile_to_size(grid, target_rows, target_cols)
+                               if target_rows is not None and target_cols is not None
+                               else None
+                           ),
+    "scale_up_rows_cols":  lambda grid, row_factor=1, col_factor=1, **kw: scale_up_rows_cols(
+                               grid, row_factor, col_factor
+                           ),
+    "move_object":         lambda grid, obj=None, delta_row=0, delta_col=0, background=0, **kw: (
+                               move_object(grid, obj, delta_row, delta_col, background)
+                               if obj is not None else None
+                           ),
+    "move_to_edge_up":     lambda grid, obj=None, background=0, **kw: (
+                               move_object_to_edge(grid, obj, "up", background)
+                               if obj is not None else None
+                           ),
+    "move_to_edge_down":   lambda grid, obj=None, background=0, **kw: (
+                               move_object_to_edge(grid, obj, "down", background)
+                               if obj is not None else None
+                           ),
+    "move_to_edge_left":   lambda grid, obj=None, background=0, **kw: (
+                               move_object_to_edge(grid, obj, "left", background)
+                               if obj is not None else None
+                           ),
+    "move_to_edge_right":  lambda grid, obj=None, background=0, **kw: (
+                               move_object_to_edge(grid, obj, "right", background)
+                               if obj is not None else None
+                           ),
 }
 
 COLOR_PRIMITIVES = {
-    "mirror_horizontal":   lambda grid, **kw: mirror_horizontal(grid),
     "swap_colors":         lambda grid, **kw: swap_colors(
                                grid,
                                kw.get("color_a", 1),
@@ -415,9 +601,50 @@ COLOR_PRIMITIVES = {
     "color_indicator":     lambda grid, objects=None, **kw: color_indicator_rule(
                                grid, objects or []
                            ),
+
+    # --- newly registered below (pre-existing functions, unchanged bodies) ---
+    "recolor_smallest":    lambda grid, objects=None, new_color=0, **kw: recolor_smallest(
+                               grid, objects or [], new_color
+                           ),
+    "recolor_all":         lambda grid, old_color=1, new_color=2, **kw: recolor_all(
+                               grid, old_color, new_color
+                           ),
+    "remove_all_color":    lambda grid, color=1, background=0, **kw: remove_all_color(
+                               grid, color, background
+                           ),
+    "recolor_by_size":     lambda grid, objects=None, size_to_color=None, **kw: recolor_by_size(
+                               grid, objects or [], size_to_color or {}
+                           ),
+    "recolor_object":      lambda grid, obj=None, new_color=0, **kw: (
+                               recolor_object(grid, obj, new_color)
+                               if obj is not None else None
+                           ),
+    "remove_object":       lambda grid, obj=None, background=0, **kw: (
+                               remove_object(grid, obj, background)
+                               if obj is not None else None
+                           ),
+    "fill_region":         lambda grid, pixels=None, color=0, **kw: (
+                               fill_region(grid, pixels, color)
+                               if pixels is not None else None
+                           ),
 }
 
 ALL_PRIMITIVES = {**SPATIAL_PRIMITIVES, **COLOR_PRIMITIVES}
+
+# Selection predicates operate on object lists, not grids, so they
+# don't belong in ALL_PRIMITIVES -- the verifier expects every entry
+# there to be grid-in, grid-out. Kept as a separate registry so the
+# hypothesis engine can look these up by name too, the same way it
+# looks up ALL_PRIMITIVES.
+SELECTION_PREDICATES = {
+    "largest_object":        largest_object,
+    "smallest_object":       smallest_object,
+    "leftmost_object":       leftmost_object,
+    "rightmost_object":      rightmost_object,
+    "topmost_object":        topmost_object,
+    "bottommost_object":     bottommost_object,
+    "unique_color_object":   unique_color_object,
+}
 
 
 # ============================================================
@@ -488,6 +715,31 @@ if __name__ == "__main__":
     print(f"Mirror horizontal:\n{mirror_horizontal(test_grid)}")
     print(f"Mirror vertical:\n{mirror_vertical(test_grid)}")
 
-    print(f"\nTotal primitives available: {len(ALL_PRIMITIVES)}")
-    print("Primitive names:", list(ALL_PRIMITIVES.keys()))
+    # ---- TEST 4: Selection predicates (synthetic, no task files needed) ----
+    print("\n--- Test 4: Selection predicates ---")
+    synthetic_objects = [
+        {"id": 0, "color": 5, "pixel_count": 1, "pixels": [(0, 0)],
+         "min_row": 0, "max_row": 0, "min_col": 0, "max_col": 0},
+        {"id": 1, "color": 5, "pixel_count": 1, "pixels": [(5, 7)],
+         "min_row": 5, "max_row": 5, "min_col": 7, "max_col": 7},
+        {"id": 2, "color": 7, "pixel_count": 10, "pixels": [(1, c) for c in range(1, 6)] + [(2, c) for c in range(1, 6)],
+         "min_row": 1, "max_row": 2, "min_col": 1, "max_col": 5},
+    ]
+    print(f"largest_object id:  {largest_object(synthetic_objects)['id']} (expect 2)")
+    print(f"smallest_object id: {smallest_object(synthetic_objects)['id']} (expect 0, tie broken by lowest id)")
+    print(f"leftmost_object id: {leftmost_object(synthetic_objects)['id']} (expect 0)")
+    print(f"rightmost_object id:{rightmost_object(synthetic_objects)['id']} (expect 1)")
+    print(f"unique_color_object id: {unique_color_object(synthetic_objects)['id']} (expect 2, only non-shared color)")
+    print(f"touches_border obj0 on 6x8 grid: {touches_border(synthetic_objects[0], (6, 8))} (expect True)")
+    print(f"touches_border obj2 on 6x8 grid: {touches_border(synthetic_objects[2], (6, 8))} (expect False)")
+
+    # ---- TEST 5: Registry sanity ----
+    print("\n--- Test 5: Registry sanity ---")
+    print(f"Total primitives in ALL_PRIMITIVES: {len(ALL_PRIMITIVES)}")
+    print(f"Total selection predicates: {len(SELECTION_PREDICATES)}")
+    assert len(SPATIAL_PRIMITIVES) + len(COLOR_PRIMITIVES) == len(ALL_PRIMITIVES), \
+        "Key collision between SPATIAL_PRIMITIVES and COLOR_PRIMITIVES!"
+    print("No key collisions between SPATIAL_PRIMITIVES and COLOR_PRIMITIVES.")
+    print("Primitive names:", sorted(ALL_PRIMITIVES.keys()))
+
     print("\nSpatial + color primitives working correctly.")

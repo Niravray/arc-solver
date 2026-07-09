@@ -1,4 +1,4 @@
-import numpy as np
+import numpy as np # type: ignore
 import sys
 
 sys.path.append(r"C:\arc_solver\src\layers")
@@ -11,7 +11,9 @@ from difference_engine import compute_difference
 from spatial_color import (
     tile_grid, color_indicator_rule, rotate_90, rotate_180,
     mirror_horizontal, mirror_vertical, recolor_all, swap_colors,
-    remove_smallest, recolor_largest, scale_up, crop_to_content
+    scale_up, crop_to_content,
+    remove_object, move_object_to_edge, recolor_object,
+    SELECTION_PREDICATES
 )
 
 # ============================================================
@@ -30,6 +32,8 @@ from spatial_color import (
 # Zero tolerance. No exceptions.
 # This is what separates 40% systems from 85%+ systems.
 # ============================================================
+
+TILE_FACTORS = [2, 3, 4, 5]
 
 
 class Hypothesis:
@@ -172,6 +176,89 @@ def get_top_predictions(verified_hypotheses, test_input, task, n=2):
 
 
 # ============================================================
+# HYPOTHESIS COMPOSITION
+#
+# Every hypothesis above (and every single-step one below) calls
+# exactly one primitive. That structurally can't solve a task whose
+# signature has multiple flags at once (e.g. OBJECTS_REMOVED and
+# OBJECTS_MOVED together) -- no single primitive removes AND moves.
+#
+# A "stage" here is a plain (grid, objs, diff) -> grid function --
+# the exact same shape as a Hypothesis.apply_fn. _compose() chains
+# two of them, re-extracting objects from the intermediate grid
+# before the second stage runs. That re-extraction matters: after
+# stage 1 removes or moves something, "the smallest object" for
+# stage 2 needs to mean smallest of what's THERE NOW, not smallest
+# of the original pre-stage-1 objects.
+#
+# These use small factory functions (_remove_stage, _move_to_edge_stage,
+# etc.) rather than the inline-lambda-with-default-args style used
+# below, because a composed hypothesis needs two independently-bound
+# selectors/params instead of one, and that gets hard to read as a
+# single nested lambda. Each factory call creates its own local
+# closure, which sidesteps the late-binding-loop-variable bug the
+# same way the default-arg trick does elsewhere in this file.
+# ============================================================
+
+def _compose(stage1_fn, stage2_fn):
+    def composed(grid, objs, diff):
+        intermediate = stage1_fn(grid, objs, diff)
+        if intermediate is None:
+            return None
+        bg = get_background_color(intermediate)
+        new_objs = encode_all_objects(
+            extract_objects(intermediate, bg), intermediate.shape
+        )
+        return stage2_fn(intermediate, new_objs, diff)
+    return composed
+
+
+def _remove_stage(sel_fn):
+    def stage(grid, objs, diff):
+        obj = sel_fn(objs)
+        if obj is None:
+            return None
+        return remove_object(grid, obj, diff["input_background"])
+    return stage
+
+
+def _move_to_edge_stage(sel_fn, direction):
+    def stage(grid, objs, diff):
+        obj = sel_fn(objs)
+        if obj is None:
+            return None
+        return move_object_to_edge(grid, obj, direction, diff["input_background"])
+    return stage
+
+
+def _recolor_stage(sel_fn, color):
+    def stage(grid, objs, diff):
+        obj = sel_fn(objs)
+        if obj is None:
+            return None
+        return recolor_object(grid, obj, color)
+    return stage
+
+
+def _tile_stage(tr, tc):
+    def stage(grid, objs, diff):
+        return tile_grid(grid, tr, tc)
+    return stage
+
+
+def _scale_stage(factor):
+    def stage(grid, objs, diff):
+        return scale_up(grid, factor)
+    return stage
+
+
+def _crop_stage():
+    def stage(grid, objs, diff):
+        return crop_to_content(grid, diff["input_background"])
+    return stage
+
+
+# ============================================================
 # HYPOTHESIS GENERATORS
 # These functions look at a diff and generate candidate hypotheses
 # to try. This is the baseline version — simple rules only.
@@ -193,11 +280,20 @@ def generate_hypotheses(task):
     diff = compute_difference(first_pair["input"], first_pair["output"])
     sig  = diff["signature"]
 
+    # Colors actually observed in this pair, used by every recolor-family
+    # hypothesis below (single-step and composed) so color guesses stay
+    # bounded instead of sweeping all 10 colors blind. Computed once here
+    # since several blocks below need the same sets.
+    input_colors  = set(int(v) for v in np.unique(first_pair["input"]))
+    output_colors = set(int(v) for v in np.unique(first_pair["output"]))
+    new_colors       = output_colors - input_colors
+    candidate_colors = new_colors if new_colors else output_colors
+
     # ---- TILING HYPOTHESES ----
     # If the output is larger than the input, try tiling
     if diff["size_increased"] or diff["size_changed"]:
-        for tr in [2, 3, 4, 5]:
-            for tc in [2, 3, 4, 5]:
+        for tr in TILE_FACTORS:
+            for tc in TILE_FACTORS:
                 tile_r, tile_c = tr, tc
                 hypotheses.append(Hypothesis(
                     name        = f"tile_{tr}x{tc}",
@@ -267,6 +363,131 @@ def generate_hypotheses(task):
                 confidence  = 0.5,
                 description = f"Scale up by factor {f}"
             ))
+
+    # ---- CROP TO CONTENT HYPOTHESIS ----
+    if diff["size_changed"] and not diff["size_increased"]:
+        hypotheses.append(Hypothesis(
+            name        = "crop_to_content",
+            apply_fn    = lambda grid, objs, d: crop_to_content(
+                grid, d["input_background"]
+            ),
+            confidence  = 0.5,
+            description = "Crop the grid down to its non-background content"
+        ))
+
+    # ---- OBJECT-SELECTOR HYPOTHESES ----
+    if "OBJECTS_REMOVED" in sig:
+        for sel_name, sel_fn in SELECTION_PREDICATES.items():
+            hypotheses.append(Hypothesis(
+                name        = f"remove_{sel_name}",
+                apply_fn    = lambda grid, objs, d, sel=sel_fn: (
+                    remove_object(grid, obj, d["input_background"])
+                    if (obj := sel(objs)) is not None else None
+                ),
+                confidence  = 0.6,
+                description = f"Remove the object selected by {sel_name}"
+            ))
+
+    if not diff["size_changed"]:
+        for direction in ["up", "down", "left", "right"]:
+            for sel_name, sel_fn in SELECTION_PREDICATES.items():
+                hypotheses.append(Hypothesis(
+                    name        = f"move_{sel_name}_to_edge_{direction}",
+                    apply_fn    = lambda grid, objs, d, sel=sel_fn, dirn=direction: (
+                        move_object_to_edge(grid, obj, dirn, d["input_background"])
+                        if (obj := sel(objs)) is not None else None
+                    ),
+                    confidence  = 0.5,
+                    description = f"Move the object selected by {sel_name} to the {direction} edge"
+                ))
+
+    if "OBJECTS_RECOLORED" in sig:
+        for sel_name, sel_fn in SELECTION_PREDICATES.items():
+            for color in candidate_colors:
+                hypotheses.append(Hypothesis(
+                    name        = f"recolor_{sel_name}_to_{color}",
+                    apply_fn    = lambda grid, objs, d, sel=sel_fn, c=color: (
+                        recolor_object(grid, obj, c)
+                        if (obj := sel(objs)) is not None else None
+                    ),
+                    confidence  = 0.5,
+                    description = f"Recolor the object selected by {sel_name} to color {color}"
+                ))
+
+        for old_c in input_colors:
+            for new_c in output_colors:
+                if old_c == new_c:
+                    continue
+                hypotheses.append(Hypothesis(
+                    name        = f"recolor_all_{old_c}_to_{new_c}",
+                    apply_fn    = lambda grid, objs, d, oc=old_c, nc=new_c: (
+                        recolor_all(grid, oc, nc)
+                    ),
+                    confidence  = 0.4,
+                    description = f"Recolor every {old_c} pixel to {new_c}"
+                ))
+
+        sorted_input_colors = sorted(input_colors)
+        for i in range(len(sorted_input_colors)):
+            for j in range(i + 1, len(sorted_input_colors)):
+                ca, cb = sorted_input_colors[i], sorted_input_colors[j]
+                hypotheses.append(Hypothesis(
+                    name        = f"swap_colors_{ca}_{cb}",
+                    apply_fn    = lambda grid, objs, d, a=ca, b=cb: (
+                        swap_colors(grid, a, b)
+                    ),
+                    confidence  = 0.4,
+                    description = f"Swap colors {ca} and {cb}"
+                ))
+
+    # ---- COMPOSED: remove an object, then move another to an edge ----
+    # Targets tasks like OBJECTS_REMOVED|OBJECTS_MOVED together, which
+    # neither remove_{selector} nor move_{selector}_to_edge_* can solve
+    # alone -- each only performs one of the two actions.
+    if "OBJECTS_REMOVED" in sig and "OBJECTS_MOVED" in sig:
+        for rem_name, rem_sel in SELECTION_PREDICATES.items():
+            for direction in ["up", "down", "left", "right"]:
+                for mov_name, mov_sel in SELECTION_PREDICATES.items():
+                    hypotheses.append(Hypothesis(
+                        name        = (f"remove_{rem_name}_then_"
+                                       f"move_{mov_name}_to_edge_{direction}"),
+                        apply_fn    = _compose(
+                            _remove_stage(rem_sel),
+                            _move_to_edge_stage(mov_sel, direction)
+                        ),
+                        confidence  = 0.5,
+                        description = (f"Remove object selected by {rem_name}, "
+                                       f"then move object selected by {mov_name} "
+                                       f"to the {direction} edge")
+                    ))
+
+    # ---- COMPOSED: resize the grid, then recolor a selected object ----
+    # Targets tasks with SIZE_CHANGE and OBJECTS_RECOLORED together.
+    # recolor_object never changes grid shape and none of the resize
+    # primitives touch color, so this combination is otherwise
+    # unreachable. The resize side reuses the same tile/scale/crop
+    # options already generated above as single-step hypotheses.
+    if diff["size_changed"] and "OBJECTS_RECOLORED" in sig:
+        resize_stages = [("crop_to_content", _crop_stage())]
+        for tr in TILE_FACTORS:
+            for tc in TILE_FACTORS:
+                resize_stages.append((f"tile_{tr}x{tc}", _tile_stage(tr, tc)))
+        for factor in [2, 3]:
+            resize_stages.append((f"scale_up_{factor}", _scale_stage(factor)))
+
+        for resize_name, resize_stage in resize_stages:
+            for sel_name, sel_fn in SELECTION_PREDICATES.items():
+                for color in candidate_colors:
+                    hypotheses.append(Hypothesis(
+                        name        = f"{resize_name}_then_recolor_{sel_name}_to_{color}",
+                        apply_fn    = _compose(
+                            resize_stage,
+                            _recolor_stage(sel_fn, color)
+                        ),
+                        confidence  = 0.5,
+                        description = (f"{resize_name}, then recolor the object "
+                                       f"selected by {sel_name} to color {color}")
+                    ))
 
     return hypotheses
 
