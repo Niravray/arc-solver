@@ -34,7 +34,12 @@ def get_background_color(grid):
     return int(background)
 
 
-def extract_objects(grid, background=None, connectivity=4):
+def extract_objects(
+    grid,
+    background=None,
+    connectivity=4,
+    include_background=False,
+):
     """
     Find all distinct objects in a grid.
     
@@ -43,6 +48,8 @@ def extract_objects(grid, background=None, connectivity=4):
                    if None, auto-detected as most common color
     connectivity = 4 means objects connect up/down/left/right only
                    8 means objects also connect diagonally
+    include_background = if True, extract components of the detected
+                         background color as objects too
     
     Returns a list of object dicts. Each dict has:
         "id"         : unique integer ID for this object
@@ -68,7 +75,11 @@ def extract_objects(grid, background=None, connectivity=4):
     obj_id = 0
 
     # Get all unique colors in the grid except background
-    unique_colors = [int(c) for c in np.unique(grid) if int(c) != background]
+    unique_colors = [
+        int(c)
+        for c in np.unique(grid)
+        if include_background or int(c) != background
+    ]
 
     for color in unique_colors:
         # Create a binary mask: 1 where this color exists, 0 elsewhere
@@ -158,7 +169,12 @@ def extract_objects_multi_strategy(grid):
     strategies["by_color"] = extract_by_color(grid, background=background)
 
     # Strategy 4: no background filtering - treat everything as objects
-    strategies["no_background"] = extract_objects(grid, background=None, connectivity=4)
+    strategies["no_background"] = extract_objects(
+        grid,
+        background=background,
+        connectivity=4,
+        include_background=True,
+    )
 
     return strategies
 

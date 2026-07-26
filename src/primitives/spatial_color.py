@@ -135,6 +135,94 @@ def move_object_to_edge(grid, obj, direction, background=0):
     return move_object(grid, obj, delta_row, delta_col, background)
 
 
+def shift_grid(grid, delta_row, delta_col, background=0):
+    """
+    Shift every pixel in the grid by (delta_row, delta_col) as one rigid
+    whole-scene pan -- unlike move_object, this isn't scoped to a single
+    object's pixels. Content shifted out of bounds is discarded (not
+    wrapped); vacated cells are filled with background.
+    """
+    rows, cols = grid.shape
+    result = np.full_like(grid, background)
+
+    if delta_row >= rows or delta_row <= -rows or delta_col >= cols or delta_col <= -cols:
+        return result
+
+    src_row_start = max(0, -delta_row)
+    src_row_end   = min(rows, rows - delta_row)
+    src_col_start = max(0, -delta_col)
+    src_col_end   = min(cols, cols - delta_col)
+
+    dst_row_start = src_row_start + delta_row
+    dst_row_end   = src_row_end + delta_row
+    dst_col_start = src_col_start + delta_col
+    dst_col_end   = src_col_end + delta_col
+
+    result[dst_row_start:dst_row_end, dst_col_start:dst_col_end] = (
+        grid[src_row_start:src_row_end, src_col_start:src_col_end]
+    )
+    return result
+
+
+_GRAVITY_STEPS = {
+    "down":  (1, 0),
+    "up":    (-1, 0),
+    "left":  (0, -1),
+    "right": (0, 1),
+}
+
+
+def apply_gravity(grid, objects, direction, background=0):
+    """
+    Slide every object independently in `direction` until each hits the
+    grid boundary or another object -- unlike move_object_to_edge, every
+    object moves by its own distance rather than one selected object
+    moving by a single shared amount.
+
+    Objects are settled in order starting from whichever is already
+    closest to the destination edge, and each already-settled object's
+    final position becomes an obstacle for the ones settled after it --
+    the same ordering a real stack of falling objects would settle in.
+    Objects still waiting their turn are not obstacles yet, since they
+    aren't between the current object and the edge.
+    """
+    step = _GRAVITY_STEPS.get(direction)
+    if step is None or not objects:
+        return None
+
+    rows, cols = grid.shape
+    dr, dc = step
+    result = np.full_like(grid, background)
+
+    if direction == "down":
+        order = sorted(objects, key=lambda o: -o["max_row"])
+    elif direction == "up":
+        order = sorted(objects, key=lambda o: o["min_row"])
+    elif direction == "left":
+        order = sorted(objects, key=lambda o: o["min_col"])
+    else:  # right
+        order = sorted(objects, key=lambda o: -o["max_col"])
+
+    occupied = set()
+    for obj in order:
+        pixels = set(obj["pixels"])
+        shift = 0
+        while True:
+            candidate = {(r + dr * (shift + 1), c + dc * (shift + 1)) for r, c in pixels}
+            if any(r < 0 or r >= rows or c < 0 or c >= cols for r, c in candidate):
+                break
+            if candidate & occupied:
+                break
+            shift += 1
+
+        final_pixels = {(r + dr * shift, c + dc * shift) for r, c in pixels}
+        for r, c in final_pixels:
+            result[r, c] = obj["color"]
+        occupied |= final_pixels
+
+    return result
+
+
 def tile_grid(grid, tile_rows, tile_cols):
     """
     Tile the grid tile_rows times vertically and tile_cols times horizontally.
@@ -366,6 +454,22 @@ def swap_colors(grid, color_a, color_b):
     new_grid[mask_a] = color_b
     new_grid[mask_b] = color_a
     return new_grid
+
+
+def recolor_by_mapping(grid, color_map):
+    """
+    Apply a full old_color -> new_color substitution table simultaneously.
+    Colors not present in color_map are left unchanged.
+
+    Masks are computed against the original grid, not the in-progress
+    result, so entries can't chain into each other (e.g. a {1: 2, 2: 3}
+    mapping must turn every original 1 into a 2, never into a 3, even
+    though 2 also appears as a key).
+    """
+    result = grid.copy()
+    for old_color, new_color in color_map.items():
+        result[grid == old_color] = new_color
+    return result
 
 
 def fill_region(grid, pixels, color):
