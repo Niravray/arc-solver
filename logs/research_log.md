@@ -221,3 +221,53 @@ Also: reading a parameter directly off the training pixels (derive) beats sweepi
 - Relational subsystem (graph_difference, relational_selectors, relational primitives) — wired into the solver, contributing real solves
 - Accuracy: 12/1000 (1.2%) → 17/1000 (1.7%) today
 - Next: extend the "derive, don't sweep" approach to more primitive families; keep clustering remaining failures to find the next bucket worth targeting
+
+## Session — July 27, 2026
+
+### What we did today
+
+Two separate tracks: finished off the old sweep, then built a genuinely different solver alongside it.
+
+**Track 1 — the existing sweep (`verifier.py`), 17 → 19/1000**
+- Clustered the unsolved failures again. The biggest single signature is `COLORS_ADDED|OBJECTS_ADDED` at 106 tasks, but inspecting actual examples showed it's a grab-bag of at least three unrelated rules — flood fill, sequence extrapolation, per-colour stamping — not one pattern. Lower yield per primitive than the movement bucket was
+- Added `fill_enclosed_regions` (flood fill from the border; anything unreached is walled in and gets recoloured). Validated standalone across the unsolved set BEFORE wiring it in: predicted exactly 2 tasks, delivered exactly those 2 (`00d62c1b`, `a5313dff`). 17 → 19/1000
+
+**Track 2 — the rule synthesis engine (`synthesis.py`, new, ~1200 lines)**
+
+The change of approach: stop picking rules from a prebuilt list, and start *inducing* a rule per task. The predefined part is a LANGUAGE of expressions with holes — `Recolor(<which objects?>, <what colour?>)` — and the holes get solved from the observed change. The loop is counterexample-guided: induce from pair 1, test on pair 2, and when a pair disproves the rule, add it to the evidence and re-induce under that stronger constraint.
+
+- Built it first for Recolor only. Selector induction is the core: objects that changed are positive examples, objects left alone are negatives, solve for a predicate covering all positives and no negatives. 6 tasks, 6/6 correct on the unseen test
+- Generalised the loop to be operator-agnostic and added **Remove** — the key test, because Remove has no second hole, so it reuses `induce_selectors` with ZERO operator-specific code. Worked immediately, which proved the selector inducer is genuinely shared machinery and not recolor code in disguise
+- Added **Move** — a new hole type (offsets, not colours). Loop, diagnosis and selector induction all worked unchanged
+- Added **two-stage composition** as an `Operator` satisfying the same interface, so `synthesize()` drives a composed rule with literally the same loop. Stage 1 uses a *tolerant* observer (labels only the part it explains); stage 2 induces from the residual with the ordinary strict observer
+- Added **Draw** — the first operator that CREATES content, so "which objects?" becomes "which objects EMIT?". Rays cast from objects, coloured by the source object or a fixed colour
+
+**Final: 22 rules found, 19 correct, 86% precision — 18 of them tasks the sweep can't solve. Combined potential 37/1000 (3.7%).**
+
+### Vocabulary expansions — every one forced by a measured failure, not a hunch
+- `hole_count`, after `0a2355a6` turned out to be a clean function of it (1 hole→1, 2→3, 3→2) with nothing in the catalog able to separate those objects — the engine was falling back on a memorising size table that then failed on test
+- **decision lists** (selector → value clauses), after `b230c067`/`d2abd087` showed the predicates needed already existed but the language had no way to say "these objects get one value, those another"
+- a **symbolic-key restriction** on geometric clause lists, after 10 Move rules memorised per-object offsets like `size==1 → (-1,0) | size==2 → (-2,0)`. This one REMOVED expressiveness and took Move from 29% → 100% precision with zero loss of correct answers
+
+### What didn't work (worth recording)
+- **Anchor-relative relational predicates.** Probed first and the probe was informative — the concept needed isn't "touches SOMETHING" but "touches THE MARKER", so I built proper anchor-relative atoms (relations to largest / smallest / uniquely-coloured / each single-instance colour). Result: **zero new solves, Recolor precision 75% → 64%**. Left in the code but disabled behind `USE_RELATIONAL_ATOMS = False` with the measurement written into the comment
+- The failure profile did shift though — across operators, tasks blocked at "cannot express a rule at all" fell 51 → 39 while "counterexample killed every candidate" rose 33 → 43. Twelve tasks stopped being blocked at induction and NONE became correct answers. That's the signal that vocabulary had stopped being the binding constraint
+- **Composition of the three existing operators.** Measured the ceiling before building: only 13 of 1000 tasks are combinations of Recolor/Remove/Move at all. Delivered +2 at 29% precision. Kept enabled only because single operators are tried first, so it fires purely additively where nothing else answered
+- **Draw's recall.** 208 pure-addition tasks available, delivered 2. The failure-stage measurement is unambiguous: of 203 reaching induction, **190 fail because the ray model never reproduces the added cells**, 7 at the selector hole, 6 get through. The machinery is sound; the single generative rule is too narrow
+
+### Key insight today
+
+**Measure the size of the prize before building for it.** This ran three times and was right three times. Composition looked like the obvious next step and measurement capped it at 13 tasks. The `COLORS_ADDED` bucket looked like the biggest opportunity at 106 tasks and turned out to be three unrelated problems. Draw looked like a 208-task win and the ray form only reaches a fraction. The one time I skipped a proper pre-measurement — relational predicates, where I probed but built anyway after the probe came back negative — was the one expansion that cost precision for nothing.
+
+**Restricting a language can beat extending it.** The single most valuable change all day was taking expressiveness AWAY: forbidding geometric decision lists from keying on metric properties took Move from 29% to 100% precision and lost no correct answers. More expressive means fitting the training pairs in more ways, and most of those ways are wrong. Every expansion needs its precision measured, not just its recall.
+
+**"Draw" is a family, not an operator.** Rays that stop before the obstacle vs on it, emission from every pixel vs the leading edge, stamping, symmetry completion — each is a separate generative form needing its own induction. The 208-task bucket is real but it's not one operator's worth of work.
+
+**Induction generalises better than search when it commits.** The synthesis engine sits at 86% precision — when it finds a rule explaining every training pair, it's usually the real rule. That's the property that makes it worth more than its raw 19 tasks, and it's the opposite of what the sweep does, where a verified hypothesis is frequently a coincidence.
+
+### Pipeline status today
+- Sweep (`solver.py`, on the scoring path): **19/1000 (1.9%)**, full eval ~5 min
+- Synthesis engine (`synthesis.py`, deliberately NOT imported by solver.py): **19 correct at 86% precision**, 18 unique to it, validated across 5 operator configurations
+- **Combined potential: 37/1000 (3.7%)** — 3× where the day before started
+- Tests 17/17, zero exceptions across 1000 tasks
+- Next: more Draw forms (the 190 blocked tasks are the largest single opportunity on the board); then decide on integrating synthesis into `solver.py` as a first-pass path with the sweep as fallback
