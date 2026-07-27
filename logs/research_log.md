@@ -247,7 +247,11 @@ The change of approach: stop picking rules from a prebuilt list, and start *indu
 - Built the registry anyway, in two kinds: **per-object forms** that keep the selector hole (rays, rays-through-obstacles, halo4/8, bbox_fill, bbox_outline, full row/col/both) and **global forms** with no selector at all (mirror_h/v/180, connect_aligned) — symmetry completion is a property of the scene, not of any one object, so there's nothing to choose between. Global forms rank ahead of per-object ones: fewer holes solved from the same evidence means less room to have fit it by accident. Mirror forms also answer the colour hole themselves, from the mirrored cell. **Draw 2 → 14 correct at 93% precision**
 - **Wired synthesis into `solver.py`** alongside the sweep — merged, not replaced. **19 → 49/1000 (4.90%)**, runtime unchanged at 5.7 min, zero exceptions
 
-**Final: 49/1000 (4.90%). Attribution: 30 solved by induction alone, 18 by the sweep alone, 1 by both.**
+- **Ran the evaluation split for the first time — 0/120.** Every design decision all day had been made by looking at training results, so this was the honest check on whether any of it transfers
+- Verified it wasn't a harness bug (task ids match solution keys, grids parse, zero exceptions), then measured *how* it failed, which matters far more than the number: **synthesis induced 0 rules and the sweep verified 0 hypotheses.** Not one candidate on any of the 120 tasks
+- Made both splits the default reporting path, with attribution behind the number rather than just accuracy
+
+**Final: training 49/1000 (4.90%) — 30 by induction alone, 18 by the sweep alone, 1 by both. Evaluation 0/120 (0.00%).**
 
 ### Vocabulary expansions — every one forced by a measured failure, not a hunch
 - `hole_count`, after `0a2355a6` turned out to be a clean function of it (1 hole→1, 2→3, 3→2) with nothing in the catalog able to separate those objects — the engine was falling back on a memorising size table that then failed on test
@@ -274,13 +278,36 @@ The change of approach: stop picking rules from a prebuilt list, and start *indu
 
 **Two weak solvers that fail differently beat one better solver.** Final attribution: 30 tasks solved by induction alone, 18 by the sweep alone, **1 by both**. They overlap on one task in forty-nine. Replacing the sweep with synthesis would have scored 31; keeping only the sweep, 19; running both across ARC's two attempt slots, 49. The lesson is to check the OVERLAP before deciding whether a new approach replaces an old one — near-zero overlap means merge, and the weaker system keeps earning its place.
 
+**The number we'd been optimising was measured on the easy half of the benchmark.** This is the most important thing learned today and it recontextualises everything above. 49/1000 on training, 0/120 on evaluation. The dataset is ARC-AGI-2 (1000 train / 120 public eval / 240 test), whose evaluation set is deliberately built so that patterns learned from training do NOT carry over — it exists to defeat systems that pattern-match instead of reason. Eval grids have 3× the cells (median 324 vs 100) and 2× the objects (11 vs 5), and the tasks need composed and indirect rules: one I looked at uses a legend row to say which colour to apply elsewhere (indirection — one part of the grid tells you how to read another), another redraws a 6×6 input at two nested scales into 16×16 (fractal self-similarity). Neither language can express either. The Kaggle test set of 240 is drawn from the hard distribution, not from training, so **the realistic submission score right now is 0%**.
+
+**"Zero rules proposed" and "zero rules correct" look identical in an accuracy column and mean opposite things.** This is the diagnostic that made the eval result interpretable rather than just demoralising. Had we proposed rules that turned out wrong, the problem would be overfitting — my design choices memorising training quirks — and the fix would be to undo today's work. We proposed *nothing*, which means it's a pure coverage failure: the framework is sound, the languages are simply silent on tasks of that complexity. Same headline number, opposite diagnosis, opposite remedy. That's why the new report always prints "rules offered" next to "correct", and why attribution is derived from which ATTEMPT slot matched rather than from the method string — the method names both sources whenever both offered an answer, so it can tell you who spoke but not who was right.
+
+**Measure on the held-out split from the start, not once at the end.** The per-task induction can't overfit — it only ever sees that task's own training pairs — but the *designer* can, and I did have that risk: which Draw forms to build, the symbolic-key restriction, the cost ranking, `hole_count` were all chosen by looking at training numbers. That turned out not to be the failure mode here, but I only know that because we finally ran the other split. A whole day of gains was reported against a measurement that couldn't have revealed this.
+
+### Decision taken
+Keep iterating against training, because it's the only split giving usable signal (eval offers no gradient to climb from 0), but **report both numbers on every run** so a training gain is never again mistaken for a real one. When choosing what to build next, bias toward what eval actually needs — indirection, multi-scale structure, many-object scenes — over more variants of what training rewards.
+
 ### Pipeline status today
-- **`solver.py` now runs BOTH solvers: 49/1000 (4.90%)**, full eval 5.7 min, zero exceptions
+- **`solver.py` now runs BOTH solvers and reports BOTH splits** (`--full-eval`; `--training-only` keeps the old behaviour)
+
+```
+split         tasks  solved   accuracy  errors   runtime
+training       1000      49      4.90%       0      347s
+evaluation      120       0      0.00%       0      179s
+```
+
+- training attribution: 31 synthesis, 18 sweep, induction precision 89% (35 rules offered)
+- evaluation attribution: nothing — no rule produced on any task
+- eval is *slower* per task (1.49s vs 0.35s) while finding nothing, which is consistent with the coverage read: bigger grids, more objects, more work done, still nothing expressible
   - attempt 1 = the induced rule, attempt 2 = the sweep's best, deduplicated so a shared answer doesn't waste the second slot
   - each source independently exception-wrapped; old fallback preserved when neither answers
 - Synthesis engine: 35 rules found, 31 correct, 89% precision, across Recolor / Remove / Move / Draw / two composition pairs
 - Sweep: 19 correct, unchanged and still pulling its weight on 18 tasks nothing else reaches
 - Kaggle submission path verified — list-per-task_id with attempt_1/attempt_2, rule derived once per task and applied to every test input
 - Tests 17/17
-- Accuracy across the two days: 12/1000 → **49/1000**, runtime 3.6 hours → under 6 minutes
-- Next: the ~950 remaining failures are overwhelmingly tasks neither language can express at all. Same method as today — pick a bucket, measure which generative form covers it, add the form cheaply on machinery that already exists. The 171 pure-addition tasks still unmatched by any of the 16 forms are the obvious place to look first
+- Accuracy across the two days: 12/1000 → **49/1000** on training, runtime 3.6 hours → under 6 minutes
+- Next, in order:
+  1. **Size-changing operators.** Every synthesis observer routes through `_grids_comparable`, which returns None the moment input and output shapes differ — so **316 of the 951 unsolved training tasks are structurally invisible to induction**, never even looked at. Of those, 230 have an output always smaller than the input, and the most common ARC pattern there is "the output IS one of the input's objects", which reuses selector induction directly. `Extract(selector)` is the obvious first one
+  2. The 171 pure-addition tasks still unmatched by any of the 16 Draw forms
+  3. Revisit `MAX_RELATIONAL_OBJECTS = 60` and `MAX_DRAW_OBJECTS = 40` — those perf guards were tuned on training-scale grids and will exclude eval-scale scenes, though they aren't the main blocker
+- Standing caveat to carry forward: everything above is training-split progress. Eval is 0 and getting it off 0 is a research problem, not a few more primitives
