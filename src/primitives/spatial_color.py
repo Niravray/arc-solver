@@ -265,6 +265,46 @@ def crop_to_content(grid, background=0):
     return grid[min_r:max_r+1, min_c:max_c+1].copy()
 
 
+def fill_enclosed_regions(grid, fill_color, background=0):
+    """
+    Recolor every background cell that's fully walled in by non-background
+    pixels, leaving background reachable from the grid border untouched.
+
+    "Enclosed" is decided by a flood fill from every border cell: any
+    background cell that flood fill reaches is "outside" and stays
+    background; whatever it never reaches is enclosed and gets
+    fill_color. Diagonal gaps don't block enclosure -- the flood fill
+    only moves orthogonally, matching how the walls themselves are drawn.
+    """
+    rows, cols = grid.shape
+    reachable = np.zeros_like(grid, dtype=bool)
+    stack = []
+
+    for r in range(rows):
+        for c in (0, cols - 1):
+            if grid[r, c] == background and not reachable[r, c]:
+                reachable[r, c] = True
+                stack.append((r, c))
+    for c in range(cols):
+        for r in (0, rows - 1):
+            if grid[r, c] == background and not reachable[r, c]:
+                reachable[r, c] = True
+                stack.append((r, c))
+
+    while stack:
+        r, c = stack.pop()
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nr, nc = r + dr, c + dc
+            if (0 <= nr < rows and 0 <= nc < cols
+                    and grid[nr, nc] == background and not reachable[nr, nc]):
+                reachable[nr, nc] = True
+                stack.append((nr, nc))
+
+    result = grid.copy()
+    result[(grid == background) & (~reachable)] = fill_color
+    return result
+
+
 def scale_up(grid, factor):
     """
     Scale the grid up by an integer factor.

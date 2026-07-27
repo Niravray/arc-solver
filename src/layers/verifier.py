@@ -13,7 +13,7 @@ from spatial_color import (
     mirror_horizontal, mirror_vertical, recolor_all, swap_colors,
     scale_up, crop_to_content,
     remove_object, move_object_to_edge, move_object, recolor_object,
-    shift_grid, apply_gravity, recolor_by_mapping,
+    shift_grid, apply_gravity, recolor_by_mapping, fill_enclosed_regions,
     SELECTION_PREDICATES
 )
 from relational import move_until_touching, connect_aligned_objects
@@ -692,6 +692,24 @@ def generate_hypotheses(task):
                     description = (f"Draw a color-{color} line connecting the object "
                                    f"selected by {anchor_name} to its aligned neighbor")
                 ))
+
+    # ---- FILL ENCLOSED REGIONS ----
+    # Classic ARC "flood fill the holes" pattern: any background pixel
+    # not reachable from the grid border by a flood fill is walled in by
+    # non-background content, and gets recolored. Only fires when a color
+    # not already in the input appears in the output (gated on
+    # COLORS_ADDED), reusing the same candidate_colors set as the recolor
+    # generators, so this is at most len(candidate_colors) hypotheses.
+    if not diff["size_changed"] and "COLORS_ADDED" in sig:
+        for color in candidate_colors:
+            hypotheses.append(Hypothesis(
+                name        = f"fill_enclosed_regions_{color}",
+                apply_fn    = lambda grid, objs, d, c=color: (
+                    fill_enclosed_regions(grid, c, d["input_background"])
+                ),
+                confidence  = 0.6,
+                description = f"Fill every enclosed background region with color {color}"
+            ))
 
     # ---- INFERRED COLOR MAPPING (derive, don't sweep) ----
     # A full simultaneous N-color substitution table, read directly off
