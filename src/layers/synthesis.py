@@ -1008,15 +1008,181 @@ def object_rays(grid, obj, direction_names, background):
     return cells
 
 
+def object_rays_through(grid, obj, direction_names, background):
+    """
+    Like object_rays but continuing PAST obstacles to the grid edge,
+    filling only the background cells on the way.
+
+    A separate form rather than a flag because the two make genuinely
+    different predictions once anything is in the way, and which one a
+    task means is exactly what induction has to decide.
+    """
+    rows, cols = grid.shape
+    cells = set()
+    for name in direction_names:
+        dr, dc = RAY_DIRECTIONS[name]
+        for (pr, pc) in obj["pixels"]:
+            r, c = pr + dr, pc + dc
+            while 0 <= r < rows and 0 <= c < cols:
+                if grid[r, c] == background:
+                    cells.add((r, c))
+                r += dr
+                c += dc
+    return cells
+
+
+def object_halo(grid, obj, background, diagonal):
+    """Background cells immediately around an object (outline / growth)."""
+    rows, cols = grid.shape
+    offsets = ([(dr, dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+                if (dr, dc) != (0, 0)] if diagonal
+               else [(-1, 0), (1, 0), (0, -1), (0, 1)])
+    cells = set()
+    for (r, c) in obj["pixels"]:
+        for dr, dc in offsets:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and grid[nr, nc] == background:
+                cells.add((nr, nc))
+    return cells
+
+
+def object_bbox_fill(grid, obj, background):
+    """Background cells inside an object's bounding box."""
+    return {(r, c)
+            for r in range(obj["min_row"], obj["max_row"] + 1)
+            for c in range(obj["min_col"], obj["max_col"] + 1)
+            if grid[r, c] == background}
+
+
+def object_bbox_outline(grid, obj, background):
+    """Background cells forming a frame just outside an object's bbox."""
+    rows, cols = grid.shape
+    r0, r1 = obj["min_row"] - 1, obj["max_row"] + 1
+    c0, c1 = obj["min_col"] - 1, obj["max_col"] + 1
+    cells = set()
+    for r in range(r0, r1 + 1):
+        for c in (c0, c1):
+            if 0 <= r < rows and 0 <= c < cols and grid[r, c] == background:
+                cells.add((r, c))
+    for c in range(c0, c1 + 1):
+        for r in (r0, r1):
+            if 0 <= r < rows and 0 <= c < cols and grid[r, c] == background:
+                cells.add((r, c))
+    return cells
+
+
+def object_full_lines(grid, obj, background, mode):
+    """Every background cell in the rows and/or columns an object occupies."""
+    rows, cols = grid.shape
+    cells = set()
+    if mode in ("row", "both"):
+        for r in {r for (r, _) in obj["pixels"]}:
+            cells |= {(r, c) for c in range(cols) if grid[r, c] == background}
+    if mode in ("col", "both"):
+        for c in {c for (_, c) in obj["pixels"]}:
+            cells |= {(r, c) for r in range(rows) if grid[r, c] == background}
+    return cells
+
+
+def _per_object_forms():
+    """
+    Registry of ways a single object can generate new cells.
+
+    Measured over the 203 pure-addition training tasks: bbox_fill covers
+    11, halo8 and bbox_outline 4 each, the line and ray variants 1-3
+    each. No form dominates -- the bucket is a long tail -- so the point
+    of a registry is breadth, and each entry stays cheap enough that
+    breadth costs little.
+    """
+    forms = {}
+    for set_name, directions in DIRECTION_SETS:
+        forms[f"ray_{set_name}"] = (
+            lambda g, o, b, d=directions: object_rays(g, o, d, b))
+        forms[f"raythru_{set_name}"] = (
+            lambda g, o, b, d=directions: object_rays_through(g, o, d, b))
+    forms["halo4"]        = lambda g, o, b: object_halo(g, o, b, False)
+    forms["halo8"]        = lambda g, o, b: object_halo(g, o, b, True)
+    forms["bbox_fill"]    = object_bbox_fill
+    forms["bbox_outline"] = object_bbox_outline
+    for mode in ("row", "col", "both"):
+        forms[f"full_{mode}"] = (
+            lambda g, o, b, m=mode: object_full_lines(g, o, b, m))
+    return forms
+
+
+PER_OBJECT_DRAW_FORMS = _per_object_forms()
+
+
+def global_mirror(grid, background, objects, kind):
+    """
+    Symmetry completion: a background cell is filled when its mirror
+    image holds content. The colour comes from that mirror cell, so this
+    form answers the colour hole itself.
+    """
+    rows, cols = grid.shape
+    out = {}
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r, c] != background:
+                continue
+            if kind == "h":
+                sr, sc = r, cols - 1 - c
+            elif kind == "v":
+                sr, sc = rows - 1 - r, c
+            else:
+                sr, sc = rows - 1 - r, cols - 1 - c
+            if grid[sr, sc] != background:
+                out[(r, c)] = int(grid[sr, sc])
+    return out
+
+
+def global_connect_aligned(grid, background, objects):
+    """Fill the gap between objects sharing an exact row or column band."""
+    out = {}
+    for i in range(len(objects)):
+        for j in range(i + 1, len(objects)):
+            a, b = objects[i], objects[j]
+            if a["min_row"] == b["min_row"] and a["max_row"] == b["max_row"]:
+                lo, hi = sorted((a, b), key=lambda o: o["min_col"])
+                for r in range(a["min_row"], a["max_row"] + 1):
+                    for c in range(lo["max_col"] + 1, hi["min_col"]):
+                        if grid[r, c] == background:
+                            out[(r, c)] = None
+            if a["min_col"] == b["min_col"] and a["max_col"] == b["max_col"]:
+                lo, hi = sorted((a, b), key=lambda o: o["min_row"])
+                for c in range(a["min_col"], a["max_col"] + 1):
+                    for r in range(lo["max_row"] + 1, hi["min_row"]):
+                        if grid[r, c] == background:
+                            out[(r, c)] = None
+    return out
+
+
+# Global forms produce the whole added set at once rather than per
+# object, so they have no selector hole. They return {cell: colour},
+# where a colour of None means the form does not determine it and the
+# colour hole still has to be solved.
+GLOBAL_DRAW_FORMS = {
+    "mirror_h":        lambda g, b, objs: global_mirror(g, b, objs, "h"),
+    "mirror_v":        lambda g, b, objs: global_mirror(g, b, objs, "v"),
+    "mirror_180":      lambda g, b, objs: global_mirror(g, b, objs, "both"),
+    "connect_aligned": global_connect_aligned,
+}
+
+
 class DrawProgram:
+    """Selected objects each generate cells via one form."""
+
     operator_name = "Draw"
 
-    def __init__(self, selector, directions, color_mode, color_value=None):
+    def __init__(self, selector, form_name, color_mode, color_value=None):
         self.selector    = selector
-        self.directions  = directions
+        self.form_name   = form_name
         self.color_mode  = color_mode   # "literal" | "source"
         self.color_value = color_value
         self.expr        = None         # holes are named separately here
+
+    def cells_for(self, grid, obj, background):
+        return PER_OBJECT_DRAW_FORMS[self.form_name](grid, obj, background)
 
     def apply(self, grid, background):
         objs = scene_objects(grid, background)
@@ -1026,15 +1192,48 @@ class DrawProgram:
                 continue
             color = (self.color_value if self.color_mode == "literal"
                      else obj["color"])
-            for (r, c) in object_rays(grid, obj, self.directions, background):
+            for (r, c) in self.cells_for(grid, obj, background):
                 result[r, c] = color
         return result
 
     def __repr__(self):
-        where = "+".join(self.directions)
         color = (f"colour {self.color_value}" if self.color_mode == "literal"
                  else "the source object's colour")
-        return f"Draw(from {self.selector}, rays {where}, in {color})"
+        return f"Draw(from {self.selector}, {self.form_name}, in {color})"
+
+
+class GlobalDrawProgram:
+    """
+    A form that generates the whole added set at once.
+
+    Has no selector: symmetry completion and gap-filling are properties
+    of the scene rather than of any one object, so there is nothing to
+    choose between.
+    """
+
+    operator_name = "Draw"
+
+    def __init__(self, form_name, color_value=None):
+        self.form_name   = form_name
+        self.color_value = color_value
+        self.selector    = None
+        self.expr        = None
+
+    def apply(self, grid, background):
+        objs = scene_objects(grid, background)
+        result = grid.copy()
+        for (r, c), color in GLOBAL_DRAW_FORMS[self.form_name](
+                grid, background, objs).items():
+            value = color if color is not None else self.color_value
+            if value is None:
+                return None
+            result[r, c] = value
+        return result
+
+    def __repr__(self):
+        color = ("" if self.color_value is None
+                 else f", in colour {self.color_value}")
+        return f"Draw({self.form_name}{color})"
 
 
 def observe_draw(input_grid, output_grid):
@@ -1100,7 +1299,14 @@ class DrawOperator:
             observed.append(obs)
 
         candidates = []
-        for set_name, directions in DIRECTION_SETS:
+        candidates.extend(self._induce_per_object(observed))
+        candidates.extend(self._induce_global(observed))
+        candidates.sort(key=lambda pair: pair[0])
+        return [program for _, program in candidates]
+
+    def _induce_per_object(self, observed):
+        candidates = []
+        for form_name, form in PER_OBJECT_DRAW_FORMS.items():
             labelled = []
             usable = True
 
@@ -1110,13 +1316,13 @@ class DrawOperator:
                 covered = set()
 
                 for obj in objs:
-                    rays = object_rays(grid, obj, directions, background)
-                    # An emitter's rays must land entirely inside the
-                    # cells that actually appeared; a ray straying onto an
-                    # untouched cell disproves this object as a source.
-                    if rays and rays <= target:
+                    cells = form(grid, obj, background)
+                    # An emitter's cells must land entirely inside the
+                    # cells that actually appeared; anything straying onto
+                    # an untouched cell disproves this object as a source.
+                    if cells and cells <= target:
                         positives.append((obj, None))
-                        covered |= rays
+                        covered |= cells
                     else:
                         negatives.append(obj)
 
@@ -1132,20 +1338,16 @@ class DrawOperator:
             if not selectors:
                 continue
 
-            # Solve the colour hole against the cells that appeared.
             new_colors = set()
             source_ok = True
             for objs, added, background, grid, output_grid in observed:
                 for (r, c) in zip(*np.where(added)):
                     new_colors.add(int(output_grid[r, c]))
-            for objs, added, background, grid, output_grid in observed:
                 for obj in objs:
-                    rays = object_rays(grid, obj, directions, background)
-                    if not rays:
-                        continue
-                    if any(output_grid[r, c] != obj["color"] for r, c in rays):
-                        source_ok = False
-                        break
+                    cells = form(grid, obj, background)
+                    if cells and cells <= set(zip(*np.where(added))):
+                        if any(output_grid[r, c] != obj["color"] for r, c in cells):
+                            source_ok = False
 
             color_options = []
             if source_ok:
@@ -1156,12 +1358,45 @@ class DrawOperator:
             for selector in selectors:
                 for mode, value in color_options:
                     candidates.append(
-                        (len(selector.atoms) + len(directions),
-                         DrawProgram(selector, directions, mode, value))
+                        (len(selector.atoms),
+                         DrawProgram(selector, form_name, mode, value))
                     )
+        return candidates
 
-        candidates.sort(key=lambda pair: pair[0])
-        return [program for _, program in candidates]
+    def _induce_global(self, observed):
+        candidates = []
+        for form_name, form in GLOBAL_DRAW_FORMS.items():
+            produced_colors = set()
+            needs_color = False
+            usable = True
+
+            for objs, added, background, grid, output_grid in observed:
+                target = set(zip(*np.where(added)))
+                cells = form(grid, background, objs)
+                if set(cells) != target:
+                    usable = False
+                    break
+                for (r, c), color in cells.items():
+                    if color is None:
+                        needs_color = True
+                        produced_colors.add(int(output_grid[r, c]))
+                    elif color != output_grid[r, c]:
+                        usable = False
+                        break
+                if not usable:
+                    break
+
+            if not usable:
+                continue
+            if needs_color and len(produced_colors) != 1:
+                continue
+
+            value = next(iter(produced_colors)) if needs_color else None
+            # Global forms have no selector to justify, so they rank
+            # ahead of per-object ones -- fewer holes solved from the
+            # same evidence means less room to have fit it by accident.
+            candidates.append((0, GlobalDrawProgram(form_name, value)))
+        return candidates
 
     def diagnose(self, program, input_grid, output_grid):
         obs = self.observe(input_grid, output_grid)
@@ -1170,10 +1405,14 @@ class DrawOperator:
         objs, added, background, grid, _ = obs
         target = set(zip(*np.where(added)))
 
-        drawn = set()
-        for obj in objs:
-            if program.selector.matches(obj, objs):
-                drawn |= object_rays(grid, obj, program.directions, background)
+        if isinstance(program, GlobalDrawProgram):
+            drawn = set(GLOBAL_DRAW_FORMS[program.form_name](
+                grid, background, objs))
+        else:
+            drawn = set()
+            for obj in objs:
+                if program.selector.matches(obj, objs):
+                    drawn |= program.cells_for(grid, obj, background)
 
         if drawn == target:
             return "cells match; the colour must be wrong"
