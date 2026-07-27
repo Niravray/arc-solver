@@ -1420,6 +1420,154 @@ class DrawOperator:
                 f"{len(drawn - target)} drawn that should not be")
 
 
+MAX_EXTRACT_OBJECTS = 80
+
+# Two readings of "output the object": the raw window of the input at the
+# object's bounding box, which carries anything else overlapping that
+# box, versus the object alone on background. Induction picks whichever
+# reproduces the training outputs rather than us deciding up front.
+EXTRACT_FORMS = {
+    "bbox_crop": lambda grid, obj: grid[obj["min_row"]:obj["max_row"] + 1,
+                                        obj["min_col"]:obj["max_col"] + 1].copy(),
+    "object_only": lambda grid, obj: obj["grid"].copy(),
+}
+
+
+class ExtractProgram:
+    """
+    The output IS one of the input's objects.
+
+    First operator whose output has a different shape from its input, so
+    it cannot go through _grids_comparable like the others.
+    """
+
+    operator_name = "Extract"
+
+    def __init__(self, selector, form_name):
+        self.selector  = selector
+        self.form_name = form_name
+        self.expr      = None
+
+    def apply(self, grid, background):
+        objs = scene_objects(grid, background)
+        chosen = [o for o in objs if self.selector.matches(o, objs)]
+        if not chosen:
+            return None
+
+        form = EXTRACT_FORMS[self.form_name]
+        candidates = [form(grid, o) for o in chosen]
+        # Several objects matching is only safe when they would all
+        # produce the SAME grid -- identical twins, where any of them is
+        # the right answer. If they disagree the selector has not
+        # actually identified which object to output, and guessing one
+        # would be answering a question the rule never settled.
+        first = candidates[0]
+        for other in candidates[1:]:
+            if other.shape != first.shape or not np.array_equal(other, first):
+                return None
+        return first
+
+    def __repr__(self):
+        return f"Extract({self.selector}, as {self.form_name})"
+
+
+def observe_extract(input_grid, output_grid):
+    """
+    Label which input objects reproduce the output when cropped.
+
+    Deliberately does NOT call _grids_comparable: that gate returns None
+    the moment the shapes differ, which is the whole point of this
+    operator and the reason 316 unsolved training tasks had never been
+    looked at by induction at all.
+    """
+    if input_grid.shape == output_grid.shape:
+        return None   # same-shape changes belong to the other operators
+
+    background = get_background_color(input_grid)
+    objs = scene_objects(input_grid, background)
+    if not objs or len(objs) > MAX_EXTRACT_OBJECTS:
+        return None
+
+    positives, negatives = [], []
+    for obj in objs:
+        produced = None
+        for form_name, form in EXTRACT_FORMS.items():
+            candidate = form(input_grid, obj)
+            if (candidate.shape == output_grid.shape
+                    and np.array_equal(candidate, output_grid)):
+                produced = form_name
+                break
+        if produced:
+            positives.append((obj, produced))
+        else:
+            negatives.append(obj)
+
+    if not positives:
+        return None
+    return objs, positives, negatives, background, input_grid
+
+
+class ExtractOperator:
+    """
+    Solves one hole: WHICH object becomes the output.
+
+    There is no value hole -- the answer is the object itself -- so this
+    is the purest reuse of induce_selectors in the engine. The form
+    (bbox crop vs object alone) is fixed per candidate and checked
+    across every pair, the same way DrawOperator handles its forms.
+    """
+
+    name = "Extract"
+    induce_expr = None
+
+    def observe(self, input_grid, output_grid):
+        return observe_extract(input_grid, output_grid)
+
+    def induce(self, evidence):
+        observed = []
+        for input_grid, output_grid in evidence:
+            obs = self.observe(input_grid, output_grid)
+            if obs is None:
+                return []
+            observed.append(obs)
+
+        candidates = []
+        for form_name in EXTRACT_FORMS:
+            labelled = []
+            usable = True
+            for objs, positives, negatives, background, grid in observed:
+                # Restrict to objects this particular form explains, so a
+                # task solved by bbox_crop is not credited to object_only.
+                same_form = [(o, f) for o, f in positives if f == form_name]
+                if not same_form:
+                    usable = False
+                    break
+                others = ([o for o, f in positives if f != form_name]
+                          + list(negatives))
+                labelled.append((objs, same_form, others, background, grid))
+
+            if not usable:
+                continue
+            for selector in induce_selectors(labelled):
+                candidates.append((len(selector.atoms),
+                                   ExtractProgram(selector, form_name)))
+
+        candidates.sort(key=lambda pair: pair[0])
+        return [program for _, program in candidates]
+
+    def diagnose(self, program, input_grid, output_grid):
+        obs = self.observe(input_grid, output_grid)
+        if obs is None:
+            return "no input object reproduces this output when cropped"
+        objs, positives, _, _, _ = obs
+        should = {o["id"] for o, _ in positives}
+        picked = {o["id"] for o in objs if program.selector.matches(o, objs)}
+        if picked == should:
+            return "right object picked; the crop form must be wrong"
+        return (f"selector wrong: should pick {sorted(should)}, "
+                f"picked {sorted(picked)}")
+
+
 class ComposedProgram:
     """Two rules applied in sequence."""
 
@@ -1624,7 +1772,8 @@ class ComposedOperator:
         )
 
 
-DRAW = DrawOperator()
+DRAW    = DrawOperator()
+EXTRACT = ExtractOperator()
 
 COMPOSED_OPERATORS = [
     ComposedOperator(REMOVE_FIRST, RECOLOR),
@@ -1634,7 +1783,7 @@ COMPOSED_OPERATORS = [
 
 # Single operators are tried first: when both can explain a task, the
 # simpler rule is the one more likely to be the real one.
-OPERATORS = [RECOLOR, REMOVE, MOVE, DRAW] + COMPOSED_OPERATORS
+OPERATORS = [RECOLOR, REMOVE, MOVE, DRAW, EXTRACT] + COMPOSED_OPERATORS
 
 
 # ============================================================
