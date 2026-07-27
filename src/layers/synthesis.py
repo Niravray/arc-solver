@@ -843,6 +843,135 @@ def observe_move(input_grid, output_grid):
     return in_objs, positives, negatives, background, input_grid
 
 
+def _match_survivors(in_objs, out_objs, output_grid, background,
+                     ignore_color=False):
+    """
+    Decide, for each input object, whether it survived into the output in
+    any form -- same place, or moved elsewhere.
+
+    Shared by the tolerant observers below. The distinction that matters
+    for composition is "gone" versus "still there but changed": an object
+    that moved leaves its original cells empty and would otherwise look
+    exactly like a removal.
+    """
+    out_by_pixels = {frozenset(o["pixels"]): o for o in out_objs}
+    by_shape = {}
+    for o in out_objs:
+        key = o["fingerprint"] if ignore_color else (o["color"], o["fingerprint"])
+        by_shape.setdefault(key, []).append(o)
+
+    claimed = set()
+    verdicts = []
+    for obj in in_objs:
+        same_place = out_by_pixels.get(frozenset(obj["pixels"]))
+        if same_place is not None and id(same_place) not in claimed:
+            claimed.add(id(same_place))
+            verdicts.append((obj, "in_place", same_place))
+            continue
+
+        key = obj["fingerprint"] if ignore_color else (obj["color"], obj["fingerprint"])
+        twins = [o for o in by_shape.get(key, []) if id(o) not in claimed]
+        if twins:
+            best = min(twins, key=lambda t: (abs(t["min_row"] - obj["min_row"])
+                                             + abs(t["min_col"] - obj["min_col"])))
+            claimed.add(id(best))
+            verdicts.append((obj, "moved", best))
+            continue
+
+        if all(output_grid[r, c] == background for (r, c) in obj["pixels"]):
+            verdicts.append((obj, "gone", None))
+        else:
+            verdicts.append((obj, "altered", None))
+
+    return verdicts
+
+
+def observe_remove_tolerant(input_grid, output_grid):
+    """
+    Label ONLY the removals, tolerating other changes in the same pair.
+
+    The strict observers reject a pair the moment anything happens that
+    their operator cannot explain, which is right for a single-operator
+    rule but makes every mixed task invisible. A composed rule needs its
+    first stage to explain its own part and leave the rest to the second
+    stage, so this labels objects that genuinely vanished as positives
+    and every survivor -- including ones that moved or were recoloured --
+    as a negative that Remove must not touch.
+    """
+    background = _grids_comparable(input_grid, output_grid)
+    if background is None:
+        return None
+
+    in_objs = scene_objects(input_grid, background)
+    out_objs = encode_all_objects(extract_objects(output_grid, background),
+                                  output_grid.shape)
+    if not in_objs:
+        return None
+
+    positives, negatives = [], []
+    for obj, verdict, _ in _match_survivors(in_objs, out_objs, output_grid,
+                                            background):
+        if verdict == "gone":
+            positives.append((obj, None))
+        else:
+            negatives.append(obj)
+
+    return in_objs, positives, negatives, background, input_grid
+
+
+def observe_move_tolerant(input_grid, output_grid):
+    """
+    Label ONLY the movements, tolerating recolouring in the same pair.
+
+    Objects are matched on shape alone, ignoring colour, so an object
+    that moves AND changes colour is still recognised as the same object
+    moving -- the recolour is then left for the second stage.
+    """
+    background = _grids_comparable(input_grid, output_grid)
+    if background is None:
+        return None
+
+    in_objs = scene_objects(input_grid, background)
+    out_objs = encode_all_objects(extract_objects(output_grid, background),
+                                  output_grid.shape)
+    if not in_objs:
+        return None
+
+    positives, negatives = [], []
+    for obj, verdict, match in _match_survivors(in_objs, out_objs, output_grid,
+                                                background, ignore_color=True):
+        if verdict == "moved":
+            positives.append((obj, (match["min_row"] - obj["min_row"],
+                                    match["min_col"] - obj["min_col"])))
+        else:
+            negatives.append(obj)
+
+    return in_objs, positives, negatives, background, input_grid
+
+
+class ComposedProgram:
+    """Two rules applied in sequence."""
+
+    operator_name = "Composed"
+
+    def __init__(self, first, second):
+        self.first  = first
+        self.second = second
+        # Exposed so the shared diagnosis path can inspect the stage that
+        # actually decides which objects get touched last.
+        self.selector = second.selector
+        self.expr     = second.expr
+
+    def apply(self, grid, background):
+        intermediate = self.first.apply(grid, background)
+        if intermediate is None:
+            return None
+        return self.second.apply(intermediate, get_background_color(intermediate))
+
+    def __repr__(self):
+        return f"{self.first} THEN {self.second}"
+
+
 class Operator:
     """Bundles an operator's observer, hole-solvers and program type."""
 
@@ -943,7 +1072,96 @@ RECOLOR = Operator("Recolor", observe_recolor, RecolorProgram, induce_color_expr
 REMOVE  = Operator("Remove",  observe_remove,  RemoveProgram)
 MOVE    = Operator("Move",    observe_move,    MoveProgram,    induce_vector_exprs)
 
-OPERATORS = [RECOLOR, REMOVE, MOVE]
+# Tolerant variants, used only as the FIRST stage of a composition.
+REMOVE_FIRST = Operator("Remove", observe_remove_tolerant, RemoveProgram)
+MOVE_FIRST   = Operator("Move",   observe_move_tolerant,   MoveProgram,
+                        induce_vector_exprs)
+
+# How many stage-one rules to carry forward. Each one costs a full
+# stage-two induction over the residual, so this is the knob that keeps
+# composition from turning into the combinatorial sweep this engine
+# exists to avoid.
+MAX_FIRST_STAGE_CANDIDATES = 6
+
+
+class ComposedOperator:
+    """
+    Two operators in sequence, presented as a single Operator.
+
+    Deliberately shaped to satisfy the same interface as Operator, so
+    synthesize() drives a composed rule with exactly the loop it uses for
+    a single one -- induce, test, absorb the counterexample, re-induce.
+    Composition is a richer hypothesis space, not a different algorithm.
+
+    Stage one is induced from a TOLERANT observation, which labels only
+    the part of the change that operator can explain. Stage two is then
+    induced from the residual (stage one's output vs the real output)
+    using the ordinary STRICT observer -- by that point the residual
+    should be a pure single-operator change, and if it isn't, strict
+    observation rejects it and this candidate dies cheaply.
+    """
+
+    def __init__(self, first, second):
+        self.first  = first
+        self.second = second
+        self.name   = f"{first.name}->{second.name}"
+        self.induce_expr = None
+
+    def observe(self, input_grid, output_grid):
+        return self.first.observe(input_grid, output_grid)
+
+    def _residual(self, program, evidence):
+        residual = []
+        for input_grid, output_grid in evidence:
+            intermediate = program.apply(input_grid,
+                                         get_background_color(input_grid))
+            if intermediate is None:
+                return None
+            residual.append((intermediate, output_grid))
+        return residual
+
+    def induce(self, evidence):
+        first_stage = self.first.induce(evidence)
+        if not first_stage:
+            return []
+
+        composed = []
+        for first_program in first_stage[:MAX_FIRST_STAGE_CANDIDATES]:
+            residual = self._residual(first_program, evidence)
+            if residual is None:
+                continue
+            # Nothing left to explain means stage one did the whole job,
+            # which the single-operator path already covers -- composing
+            # a no-op second stage on top would only add a worse-ranked
+            # duplicate of a rule we can already find.
+            if all(np.array_equal(mid, out) for mid, out in residual):
+                continue
+            for second_program in self.second.induce(residual)[:2]:
+                composed.append(ComposedProgram(first_program, second_program))
+
+        return composed
+
+    def diagnose(self, program, input_grid, output_grid):
+        background = get_background_color(input_grid)
+        intermediate = program.first.apply(input_grid, background)
+        if intermediate is None:
+            return f"stage 1 ({program.first}) could not be applied"
+        if np.array_equal(intermediate, output_grid):
+            return "stage 1 alone already matches; stage 2 overshot"
+        return "stage 2: " + self.second.diagnose(
+            program.second, intermediate, output_grid
+        )
+
+
+COMPOSED_OPERATORS = [
+    ComposedOperator(REMOVE_FIRST, RECOLOR),
+    ComposedOperator(REMOVE_FIRST, MOVE),
+    ComposedOperator(MOVE_FIRST,   RECOLOR),
+]
+
+# Single operators are tried first: when both can explain a task, the
+# simpler rule is the one more likely to be the real one.
+OPERATORS = [RECOLOR, REMOVE, MOVE] + COMPOSED_OPERATORS
 
 
 # ============================================================
