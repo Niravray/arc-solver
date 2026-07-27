@@ -949,6 +949,238 @@ def observe_move_tolerant(input_grid, output_grid):
     return in_objs, positives, negatives, background, input_grid
 
 
+RAY_DIRECTIONS = {
+    "up":         (-1, 0),
+    "down":       (1, 0),
+    "left":       (0, -1),
+    "right":      (0, 1),
+    "up_left":    (-1, -1),
+    "up_right":   (-1, 1),
+    "down_left":  (1, -1),
+    "down_right": (1, 1),
+}
+
+# Direction sets worth trying, kept to a bounded, meaningful list rather
+# than all 255 subsets of eight directions.
+DIRECTION_SETS = [
+    ("up", ("up",)),
+    ("down", ("down",)),
+    ("left", ("left",)),
+    ("right", ("right",)),
+    ("vertical", ("up", "down")),
+    ("horizontal", ("left", "right")),
+    ("orthogonal", ("up", "down", "left", "right")),
+    ("diagonal", ("up_left", "up_right", "down_left", "down_right")),
+    ("all8", tuple(RAY_DIRECTIONS)),
+]
+
+MAX_DRAW_OBJECTS = 40   # ray induction is per object per direction; keep it bounded
+
+
+def cast_ray(grid, start, step, background):
+    """
+    Cells a ray covers leaving `start`, stopping before the grid edge or
+    the first non-background cell.
+
+    Stopping BEFORE existing content matters: Draw only fills background,
+    so a ray that would run into an object ends against it rather than
+    through it -- which is also what makes "until it hits something" fall
+    out of the same code as "until the edge".
+    """
+    rows, cols = grid.shape
+    dr, dc = step
+    r, c = start[0] + dr, start[1] + dc
+    cells = []
+    while 0 <= r < rows and 0 <= c < cols and grid[r, c] == background:
+        cells.append((r, c))
+        r += dr
+        c += dc
+    return cells
+
+
+def object_rays(grid, obj, direction_names, background):
+    """Union of the rays every pixel of an object emits."""
+    cells = set()
+    for name in direction_names:
+        step = RAY_DIRECTIONS[name]
+        for pixel in obj["pixels"]:
+            cells.update(cast_ray(grid, pixel, step, background))
+    return cells
+
+
+class DrawProgram:
+    operator_name = "Draw"
+
+    def __init__(self, selector, directions, color_mode, color_value=None):
+        self.selector    = selector
+        self.directions  = directions
+        self.color_mode  = color_mode   # "literal" | "source"
+        self.color_value = color_value
+        self.expr        = None         # holes are named separately here
+
+    def apply(self, grid, background):
+        objs = scene_objects(grid, background)
+        result = grid.copy()
+        for obj in objs:
+            if not self.selector.matches(obj, objs):
+                continue
+            color = (self.color_value if self.color_mode == "literal"
+                     else obj["color"])
+            for (r, c) in object_rays(grid, obj, self.directions, background):
+                result[r, c] = color
+        return result
+
+    def __repr__(self):
+        where = "+".join(self.directions)
+        color = (f"colour {self.color_value}" if self.color_mode == "literal"
+                 else "the source object's colour")
+        return f"Draw(from {self.selector}, rays {where}, in {color})"
+
+
+def observe_draw(input_grid, output_grid):
+    """
+    A pure addition: existing content is untouched and only background
+    cells are filled.
+
+    Unlike the other observers this cannot label positives on its own --
+    "which objects emit" is not visible from the change alone, it depends
+    on which direction set is being considered. So this returns the raw
+    scene and the cells that appeared, and DrawOperator.induce works out
+    the emitters per candidate direction set.
+    """
+    background = _grids_comparable(input_grid, output_grid)
+    if background is None:
+        return None
+
+    existing = input_grid != background
+    if not np.array_equal(input_grid[existing], output_grid[existing]):
+        return None
+
+    added = (input_grid == background) & (output_grid != background)
+    if not added.any():
+        return None
+
+    objs = scene_objects(input_grid, background)
+    if not objs or len(objs) > MAX_DRAW_OBJECTS:
+        return None
+
+    return objs, added, background, input_grid, output_grid
+
+
+class DrawOperator:
+    """
+    Creates content rather than transforming existing objects.
+
+    The other three operators pick from objects that already exist, so
+    their "which objects?" hole is answered by looking at what changed.
+    Nothing that appears here corresponds to an input object at all, so
+    the holes are different: which objects EMIT, in which directions, and
+    in what colour. Measuring the 208 pure-addition training tasks showed
+    120 of them place every new cell in the row or column of an existing
+    object, which is why rays are the form built first.
+
+    Emitters are still solved with the shared induce_selectors: for a
+    given direction set, an object either accounts for part of the added
+    cells or it does not, and that labelling is exactly the positive /
+    negative split concept learning needs.
+    """
+
+    name = "Draw"
+    induce_expr = None
+
+    def observe(self, input_grid, output_grid):
+        return observe_draw(input_grid, output_grid)
+
+    def induce(self, evidence):
+        observed = []
+        for input_grid, output_grid in evidence:
+            obs = self.observe(input_grid, output_grid)
+            if obs is None:
+                return []
+            observed.append(obs)
+
+        candidates = []
+        for set_name, directions in DIRECTION_SETS:
+            labelled = []
+            usable = True
+
+            for objs, added, background, grid, output_grid in observed:
+                target = set(zip(*np.where(added)))
+                positives, negatives = [], []
+                covered = set()
+
+                for obj in objs:
+                    rays = object_rays(grid, obj, directions, background)
+                    # An emitter's rays must land entirely inside the
+                    # cells that actually appeared; a ray straying onto an
+                    # untouched cell disproves this object as a source.
+                    if rays and rays <= target:
+                        positives.append((obj, None))
+                        covered |= rays
+                    else:
+                        negatives.append(obj)
+
+                if not positives or covered != target:
+                    usable = False
+                    break
+                labelled.append((objs, positives, negatives, background, grid))
+
+            if not usable:
+                continue
+
+            selectors = induce_selectors(labelled)
+            if not selectors:
+                continue
+
+            # Solve the colour hole against the cells that appeared.
+            new_colors = set()
+            source_ok = True
+            for objs, added, background, grid, output_grid in observed:
+                for (r, c) in zip(*np.where(added)):
+                    new_colors.add(int(output_grid[r, c]))
+            for objs, added, background, grid, output_grid in observed:
+                for obj in objs:
+                    rays = object_rays(grid, obj, directions, background)
+                    if not rays:
+                        continue
+                    if any(output_grid[r, c] != obj["color"] for r, c in rays):
+                        source_ok = False
+                        break
+
+            color_options = []
+            if source_ok:
+                color_options.append(("source", None))
+            if len(new_colors) == 1:
+                color_options.append(("literal", next(iter(new_colors))))
+
+            for selector in selectors:
+                for mode, value in color_options:
+                    candidates.append(
+                        (len(selector.atoms) + len(directions),
+                         DrawProgram(selector, directions, mode, value))
+                    )
+
+        candidates.sort(key=lambda pair: pair[0])
+        return [program for _, program in candidates]
+
+    def diagnose(self, program, input_grid, output_grid):
+        obs = self.observe(input_grid, output_grid)
+        if obs is None:
+            return "pair is not a pure addition"
+        objs, added, background, grid, _ = obs
+        target = set(zip(*np.where(added)))
+
+        drawn = set()
+        for obj in objs:
+            if program.selector.matches(obj, objs):
+                drawn |= object_rays(grid, obj, program.directions, background)
+
+        if drawn == target:
+            return "cells match; the colour must be wrong"
+        return (f"cells wrong: {len(target - drawn)} expected cells never drawn, "
+                f"{len(drawn - target)} drawn that should not be")
+
+
 class ComposedProgram:
     """Two rules applied in sequence."""
 
@@ -1153,6 +1385,8 @@ class ComposedOperator:
         )
 
 
+DRAW = DrawOperator()
+
 COMPOSED_OPERATORS = [
     ComposedOperator(REMOVE_FIRST, RECOLOR),
     ComposedOperator(REMOVE_FIRST, MOVE),
@@ -1161,7 +1395,7 @@ COMPOSED_OPERATORS = [
 
 # Single operators are tried first: when both can explain a task, the
 # simpler rule is the one more likely to be the real one.
-OPERATORS = [RECOLOR, REMOVE, MOVE] + COMPOSED_OPERATORS
+OPERATORS = [RECOLOR, REMOVE, MOVE, DRAW] + COMPOSED_OPERATORS
 
 
 # ============================================================
