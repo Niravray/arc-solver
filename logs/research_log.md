@@ -242,7 +242,12 @@ The change of approach: stop picking rules from a prebuilt list, and start *indu
 - Added **two-stage composition** as an `Operator` satisfying the same interface, so `synthesize()` drives a composed rule with literally the same loop. Stage 1 uses a *tolerant* observer (labels only the part it explains); stage 2 induces from the residual with the ordinary strict observer
 - Added **Draw** — the first operator that CREATES content, so "which objects?" becomes "which objects EMIT?". Rays cast from objects, coloured by the source object or a fixed colour
 
-**Final: 22 rules found, 19 correct, 86% precision — 18 of them tasks the sweep can't solve. Combined potential 37/1000 (3.7%).**
+- Draw v1 only reached 2 tasks, so measured *why* rather than guessing: of 203 pure-addition tasks reaching induction, **190 failed because the ray model never reproduced the added cells**, 7 at the selector hole, 6 got through. The machinery was fine; the single generative form was the bottleneck
+- So measured 16 candidate forms against those 203 tasks before writing any of them. Result was a flat long tail — `bbox_fill` 11, `connect_aligned`/`halo8`/`bbox_outline` 4 each, line and ray variants 1–3 each, 32 total. No dominant form
+- Built the registry anyway, in two kinds: **per-object forms** that keep the selector hole (rays, rays-through-obstacles, halo4/8, bbox_fill, bbox_outline, full row/col/both) and **global forms** with no selector at all (mirror_h/v/180, connect_aligned) — symmetry completion is a property of the scene, not of any one object, so there's nothing to choose between. Global forms rank ahead of per-object ones: fewer holes solved from the same evidence means less room to have fit it by accident. Mirror forms also answer the colour hole themselves, from the mirrored cell. **Draw 2 → 14 correct at 93% precision**
+- **Wired synthesis into `solver.py`** alongside the sweep — merged, not replaced. **19 → 49/1000 (4.90%)**, runtime unchanged at 5.7 min, zero exceptions
+
+**Final: 49/1000 (4.90%). Attribution: 30 solved by induction alone, 18 by the sweep alone, 1 by both.**
 
 ### Vocabulary expansions — every one forced by a measured failure, not a hunch
 - `hole_count`, after `0a2355a6` turned out to be a clean function of it (1 hole→1, 2→3, 3→2) with nothing in the catalog able to separate those objects — the engine was falling back on a memorising size table that then failed on test
@@ -261,13 +266,21 @@ The change of approach: stop picking rules from a prebuilt list, and start *indu
 
 **Restricting a language can beat extending it.** The single most valuable change all day was taking expressiveness AWAY: forbidding geometric decision lists from keying on metric properties took Move from 29% to 100% precision and lost no correct answers. More expressive means fitting the training pairs in more ways, and most of those ways are wrong. Every expansion needs its precision measured, not just its recall.
 
-**"Draw" is a family, not an operator.** Rays that stop before the obstacle vs on it, emission from every pixel vs the leading edge, stamping, symmetry completion — each is a separate generative form needing its own induction. The 208-task bucket is real but it's not one operator's worth of work.
+**"Draw" is a family, not an operator** — and acting on that was the biggest single win of the day. Rays stopping before vs on the obstacle, emission from every pixel vs the leading edge, halos, bbox fills, symmetry completion: each is a separate generative form. Turning Draw's one hardcoded form into a registry took it from 2 to 14 correct.
 
-**Induction generalises better than search when it commits.** The synthesis engine sits at 86% precision — when it finds a rule explaining every training pair, it's usually the real rule. That's the property that makes it worth more than its raw 19 tasks, and it's the opposite of what the sweep does, where a verified hypothesis is frequently a coincidence.
+**Measure the prize, but weigh it against the MARGINAL cost.** This refines the earlier rule and is the correction I'd most want to remember. The 16-form probe came back as a flat long tail with nothing above 11, and on the earlier heuristic ("is this bucket big enough?") that reads as *skip it*. Building it anyway converted 32 cell-level matches into 12 extra correct answers — because once the shared machinery exists, each new form is about ten lines. A long tail is worth harvesting exactly when the per-item cost has already been paid. The right question isn't "how big is the biggest bucket" but "how much does one more entry cost me".
+
+**Induction generalises better than search when it commits.** The synthesis engine sits at 89% precision — when it finds a rule explaining every training pair, it's usually the real rule. That's the opposite of the sweep, where a hypothesis that verifies on the training pairs is frequently a coincidence.
+
+**Two weak solvers that fail differently beat one better solver.** Final attribution: 30 tasks solved by induction alone, 18 by the sweep alone, **1 by both**. They overlap on one task in forty-nine. Replacing the sweep with synthesis would have scored 31; keeping only the sweep, 19; running both across ARC's two attempt slots, 49. The lesson is to check the OVERLAP before deciding whether a new approach replaces an old one — near-zero overlap means merge, and the weaker system keeps earning its place.
 
 ### Pipeline status today
-- Sweep (`solver.py`, on the scoring path): **19/1000 (1.9%)**, full eval ~5 min
-- Synthesis engine (`synthesis.py`, deliberately NOT imported by solver.py): **19 correct at 86% precision**, 18 unique to it, validated across 5 operator configurations
-- **Combined potential: 37/1000 (3.7%)** — 3× where the day before started
-- Tests 17/17, zero exceptions across 1000 tasks
-- Next: more Draw forms (the 190 blocked tasks are the largest single opportunity on the board); then decide on integrating synthesis into `solver.py` as a first-pass path with the sweep as fallback
+- **`solver.py` now runs BOTH solvers: 49/1000 (4.90%)**, full eval 5.7 min, zero exceptions
+  - attempt 1 = the induced rule, attempt 2 = the sweep's best, deduplicated so a shared answer doesn't waste the second slot
+  - each source independently exception-wrapped; old fallback preserved when neither answers
+- Synthesis engine: 35 rules found, 31 correct, 89% precision, across Recolor / Remove / Move / Draw / two composition pairs
+- Sweep: 19 correct, unchanged and still pulling its weight on 18 tasks nothing else reaches
+- Kaggle submission path verified — list-per-task_id with attempt_1/attempt_2, rule derived once per task and applied to every test input
+- Tests 17/17
+- Accuracy across the two days: 12/1000 → **49/1000**, runtime 3.6 hours → under 6 minutes
+- Next: the ~950 remaining failures are overwhelmingly tasks neither language can express at all. Same method as today — pick a bucket, measure which generative form covers it, add the form cheaply on machinery that already exists. The 171 pure-addition tasks still unmatched by any of the 16 forms are the obvious place to look first
