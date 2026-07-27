@@ -330,6 +330,36 @@ class Selector:
         return " AND ".join(name for name, _ in self.atoms)
 
 
+# Atoms that pin a specific measurement rather than describe structure.
+# "size==4" is true of this grid's objects; "is_largest" is true of the
+# same object in any grid.
+METRIC_ATOM_PREFIXES = ("color==", "size==", "height==", "width==", "holes==")
+
+
+def selector_cost(selector):
+    """
+    Rank selectors by how much they MEMORISE.
+
+    Fewer atoms first, then fewer measurement-pinned atoms. Task
+    72ca375d is the case that motivated this: three selectors explained
+    every training pair identically --
+
+        height==2 AND is_sym_v            -> wrong on the test grid
+        color_is_unique AND is_sym_v      -> right
+        not_is_single_pixel AND is_sym_v  -> right
+
+    -- and with equal atom counts the tie fell to catalog order, which
+    picked the metric one. "The symmetric object that is 2 rows tall"
+    happens to be true of the training grids; "the symmetric object that
+    isn't a single pixel" is the actual rule. Same principle already
+    applied to Move's decision lists, now applied to selection, so every
+    operator inherits it rather than just one.
+    """
+    metric = sum(1 for name, _ in selector.atoms
+                 if name.startswith(METRIC_ATOM_PREFIXES))
+    return (len(selector.atoms), metric)
+
+
 def induce_selectors(observed):
     """
     Solve the 'which objects?' hole as a concept-learning problem.
@@ -369,6 +399,7 @@ def induce_selectors(observed):
                 if covers_exactly(cand):
                     good.append(cand)
 
+    good.sort(key=selector_cost)
     return good
 
 
@@ -493,6 +524,14 @@ def induce_decision_list(observed):
     if len(values) < 2:
         return None
 
+    # Decided up front, because it changes which selector to pick rather
+    # than only whether to accept the result afterwards. Geometric values
+    # need colour-keyed clauses (see below), and induce_selectors now
+    # ranks colour== atoms LAST as measurement-pinned -- so taking its
+    # first selector and checking afterwards would reject every geometric
+    # list that a colour key could have explained.
+    values_are_geometric = all(isinstance(value, tuple) for value in values)
+
     clauses = []
     for value in values:
         relabeled = []
@@ -502,25 +541,25 @@ def induce_decision_list(observed):
             relabeled.append((objs, same, other, background, grid))
 
         selectors = induce_selectors(relabeled)
+        if values_are_geometric:
+            selectors = [s for s in selectors
+                         if all(name.startswith("color==")
+                                for name, _ in s.atoms)]
         if not selectors:
             return None
         clauses.append((selectors[0], value))
 
     # A clause list whose VALUES are geometric (pixel offsets) only
-    # transfers if its KEYS are symbolic. Measured on the training set:
-    # every Move decision list keyed on colour predicted the unseen test
-    # correctly (342dd610, f45f5ca7), and every one keyed on a metric
-    # property -- size, height, border contact -- failed, because rules
-    # like "size==1 -> (-1,0) | size==2 -> (-2,0) | size==3 -> (-3,0)"
-    # are memorizing an underlying relationship one object at a time,
-    # which is the same failure mode decision lists were added to fix.
-    # Colours come from a fixed palette and mean the same thing in the
-    # test grid; a size or a row index does not.
-    if all(isinstance(value, tuple) for _, value in clauses):
-        for selector, _ in clauses:
-            if not all(name.startswith("color==") for name, _ in selector.atoms):
-                return None
-
+    # transfers if its KEYS are symbolic, which is why the colour-only
+    # filter is applied while choosing selectors above. Measured on the
+    # training set: every Move decision list keyed on colour predicted
+    # the unseen test correctly (342dd610, f45f5ca7), and every one keyed
+    # on a metric property -- size, height, border contact -- failed,
+    # because rules like "size==1 -> (-1,0) | size==2 -> (-2,0)" memorize
+    # an underlying relationship one object at a time, the same failure
+    # mode decision lists were added to fix. Colours come from a fixed
+    # palette and mean the same thing in the test grid; a size or a row
+    # index does not.
     return DecisionListExpr(clauses)
 
 
