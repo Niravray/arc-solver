@@ -1700,6 +1700,27 @@ def synthesize(task, operator, verbose=False):
     return program, trace
 
 
+def synthesize_program(task, operators=None):
+    """
+    Induce a rule for a task without applying it to anything.
+
+    Separate from solve_with_synthesis so a caller with several test
+    inputs induces once and applies many times, rather than re-running
+    the whole induction per test grid.
+
+    Returns (program, operator_name), or (None, None) if no operator's
+    language explains every training pair.
+    """
+    for operator in (operators or OPERATORS):
+        try:
+            program, _ = synthesize(task, operator)
+        except Exception:
+            continue
+        if program is not None:
+            return program, operator.name
+    return None, None
+
+
 def solve_with_synthesis(task, operators=None, verbose=False):
     """
     Try each operator's induction loop in turn; first rule that explains
