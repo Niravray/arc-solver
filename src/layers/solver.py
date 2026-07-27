@@ -2,6 +2,7 @@ import numpy as np # type: ignore
 import sys
 import json
 import os
+import collections
 
 sys.path.append(r"C:\arc_solver\src\layers")
 sys.path.append(r"C:\arc_solver\src\primitives")
@@ -420,6 +421,7 @@ def run_full_evaluation(tasks, task_ids, solutions, progress_every=50):
             "task_id":          task_id,
             "correct":          False,
             "method":           None,
+            "matched_attempt":  None,
             "duration_seconds": None,
             "error":            None,
             "hypotheses_tried": None,
@@ -436,10 +438,15 @@ def run_full_evaluation(tasks, task_ids, solutions, progress_every=50):
             correct_outputs = solutions.get(task_id)
             is_correct = False
             if correct_outputs:
-                for pred in predictions:
+                # Which ATTEMPT matched is the attribution that matters:
+                # attempt 1 is the induced rule whenever synthesis produced
+                # one, so this is what separates the two solvers' credit
+                # rather than guessing from the method string.
+                for slot, pred in enumerate(predictions, start=1):
                     for correct_out in correct_outputs:
                         if np.array_equal(pred, correct_out):
                             is_correct = True
+                            record["matched_attempt"] = slot
                             break
                     if is_correct:
                         break
@@ -540,6 +547,134 @@ def save_evaluation_results(results, path=r"C:\arc_solver\logs\full_evaluation_r
     print(f"\nFull evaluation results saved to {path}")
 
 
+def evaluate_split(split, limit=None, verbose=False):
+    """
+    Run the full solver over one split and return (records, duration).
+
+    `split` is "training" or "evaluation" -- both have ground-truth
+    solutions. Progress printing is off by default so a dual run does
+    not bury its own summary.
+    """
+    tasks     = load_all_tasks(split)
+    task_ids  = get_task_ids(split)
+    solutions = load_solutions(split)
+    if limit:
+        task_ids = task_ids[:limit]
+
+    return run_full_evaluation(
+        tasks, task_ids, solutions,
+        progress_every=(50 if verbose else 10 ** 9),
+    )
+
+
+def _split_statistics(records):
+    """Technical breakdown of one split's records."""
+    total   = len(records)
+    correct = [r for r in records if r["correct"]]
+    errored = [r for r in records if r["error"] is not None]
+
+    # Attribution. Attempt 1 holds the induced rule whenever synthesis
+    # produced one, so the attempt that matched says which solver earned
+    # the task -- the method string alone cannot, since it lists both
+    # sources whenever both offered an answer.
+    induced_offered = [r for r in records
+                       if (r["method"] or "").startswith("synthesis:")]
+    by_solver = collections.Counter()
+    for r in correct:
+        method = r["method"] or ""
+        if method.startswith("synthesis:") and r["matched_attempt"] == 1:
+            by_solver["synthesis"] += 1
+        elif method == "fallback":
+            by_solver["fallback (lucky)"] += 1
+        else:
+            by_solver["sweep"] += 1
+
+    by_operator = collections.Counter()
+    for r in correct:
+        method = r["method"] or ""
+        if method.startswith("synthesis:") and r["matched_attempt"] == 1:
+            by_operator["synthesis:" + method.split("+")[0][10:]] += 1
+        else:
+            head = method.split("+sweep:")[-1] if "+sweep:" in method else method
+            by_operator["sweep:" + head.split("_")[0]] += 1
+
+    timed = [r["duration_seconds"] for r in records
+             if r["duration_seconds"] is not None]
+
+    return {
+        "total":            total,
+        "correct":          len(correct),
+        "accuracy":         (len(correct) / total * 100) if total else 0.0,
+        "errored":          len(errored),
+        "induced_offered":  len(induced_offered),
+        "induced_precision": (by_solver["synthesis"] / len(induced_offered) * 100)
+                             if induced_offered else 0.0,
+        "by_solver":        by_solver,
+        "by_operator":      by_operator,
+        "runtime":          sum(timed),
+        "mean_task":        (sum(timed) / len(timed)) if timed else 0.0,
+        "solved_ids":       [r["task_id"] for r in correct],
+    }
+
+
+def print_technical_report(stats_by_split):
+    """
+    Print accuracy AND the technical detail behind it, for every split.
+
+    Both splits are always reported together. Measuring only on training
+    once hid the fact that the solver scored 0 on the evaluation split --
+    a headline accuracy with no attribution behind it cannot distinguish
+    "proposed the wrong rule" from "proposed no rule at all", and those
+    call for completely different work.
+    """
+    print("\n" + "=" * 64)
+    print("TECHNICAL EVALUATION REPORT")
+    print("=" * 64)
+
+    print(f"\n{'split':<12}{'tasks':>7}{'solved':>8}{'accuracy':>11}"
+          f"{'errors':>8}{'runtime':>10}")
+    print("-" * 64)
+    for split, s in stats_by_split.items():
+        print(f"{split:<12}{s['total']:>7}{s['correct']:>8}"
+              f"{s['accuracy']:>10.2f}%{s['errored']:>8}"
+              f"{s['runtime']:>9.0f}s")
+
+    for split, s in stats_by_split.items():
+        print(f"\n--- {split} ---")
+        print(f"  solver attribution     : {dict(s['by_solver']) or '{}'}")
+        print(f"  induction offered rules: {s['induced_offered']}"
+              f"   precision {s['induced_precision']:.0f}%")
+        print(f"  mean time per task     : {s['mean_task']:.3f}s")
+        if s["by_operator"]:
+            print("  solved by:")
+            for name, count in s["by_operator"].most_common():
+                print(f"      {count:3d}  {name}")
+        else:
+            print("  solved by: nothing -- no rule was produced on any task")
+
+
+def run_dual_evaluation(limit=None):
+    """
+    Evaluate BOTH splits and print one technical report.
+
+    This is the default reporting path. The training split is the one we
+    iterate against because it gives usable signal; the evaluation split
+    is the honest measure of whether that signal transfers, and it is
+    reported alongside so a training gain is never mistaken for a real
+    one.
+    """
+    stats_by_split = {}
+    for split in ("training", "evaluation"):
+        print(f"Evaluating {split} split...")
+        records, duration = evaluate_split(split, limit=limit)
+        stats_by_split[split] = _split_statistics(records)
+        if split == "training":
+            save_evaluation_results(records)
+
+    print_technical_report(stats_by_split)
+    return stats_by_split
+
+
 def run_full_training_evaluation():
     """
     Entry point for the full 1000-task training evaluation described in
@@ -576,8 +711,10 @@ def run_full_training_evaluation():
 
 if __name__ == "__main__":
     if "--full-eval" in sys.argv:
-        # New evaluation mode -- does not touch anything below in the
-        # default path.
+        # Reports BOTH splits. Training is what we iterate against;
+        # evaluation is the honest check that the iteration transfers.
+        run_dual_evaluation()
+    elif "--training-only" in sys.argv:
         run_full_training_evaluation()
     else:
         print("=" * 50)
