@@ -336,6 +336,21 @@ Training 49/1000 → **56/1000 (5.60%)**. Evaluation still 0/120. Four changes s
 - But measurement showed induction is **not time-bound**: over 1000 failing `induce()` calls, median 0.75ms, max 325ms. Neither budget ever binds
 - Retained as a runaway guard, since two separate incidents have seen one task consume hours. It buys safety, not solutions
 
+**Composition expanded from 3 operator pairs to 12 (+3)**
+- The 13-task composition ceiling measured yesterday was **stale** — it predated Draw and Extract. Re-measuring with the current operator set puts the reachable multi-concept space at **68 tasks**, a 5× increase, almost entirely because APPEAR became expressible once Draw existed (APPEAR+MOVE+REMOVE 14, APPEAR+RECOLOR 13, APPEAR+REMOVE 12, APPEAR+MOVE 9)
+- Needed tolerant observers for Recolor and Draw: a first stage must label only *its* part of the change and leave the rest to stage two, whereas the strict observers reject a pair the moment anything else happens — precisely the situation composition exists for
+- First-stage candidates went 2 → 4, so ordered pairs went 3 → 12. Measured on the unsolved set first: 7 rules found, 3 correct, 78s — cheap enough to justify wiring. New solves are `Recolor→Draw` (×2) and `Draw→Remove`
+
+**Kaggle submission dry run — pipeline validated**
+- 240/240 task ids matching Kaggle's own `sample_submission.json`, **0 malformed entries**, 17 multi-test-input tasks with correct entry counts, 58s build, 0.38 MB
+- The 17 multi-test-input tasks are the meaningful check — that is exactly the case the deleted `format_submission()` got silently wrong, emitting one prediction where several were required
+
+**Portability — the code now runs somewhere other than this laptop**
+- Absolute Windows paths were baked into **10 files**: eight `sys.path.append` calls plus `DATA_PATH` and the `save_submission`/`save_evaluation_results` defaults. Kaggle runs on Linux under `/kaggle`, so none of them resolve there and the code would not have imported, let alone run
+- `sys.path` now derives from `__file__`; `DATA_PATH` resolves via `ARC_DATA_DIR` → any `/kaggle/input/*` containing `arc-agi*` files → local `data/`; `save_submission` targets `/kaggle/working/submission.json` when that exists
+- Added `kaggle_notebook.py`. ARC Prize is a **code** competition: the submission is a notebook Kaggle runs itself with no internet, which must write `submission.json` during the run, and the private test set is swapped in at scoring time — so nothing may assume the contents of the test file currently on disk. The entry point also backfills well-formed placeholders for any missing task id, since Kaggle rejects an incomplete file outright rather than scoring zero on the gap
+- Verified no behaviour change: 59/1000 and 0/120 identical before and after
+
 ### What didn't work (measured and rejected)
 
 - **Depth-3 conjunctions.** Found a selector in 1 of 43 depth-2 failures, and both programs it produced were wrong on test — `color==1 AND width==3 AND not_shape_is_unique`, three atoms, two of them metric. Widening the language again bought only new ways to overfit
@@ -352,17 +367,20 @@ Training 49/1000 → **56/1000 (5.60%)**. Evaluation still 0/120. Four changes s
 
 **Bucket size keeps overestimating yield, now with a second filter identified.** Extract: 230 shrinking tasks → 15 exact form matches → 12 observable → 5 solved. Previously the gap was form-match; this time a second filter appeared behind it, the selector hole. Estimating from the widest number available has been wrong every single time.
 
+**A measured ceiling expires when the thing it measured changes.** "Composition is worth 13 tasks" was measured with three operators and then treated as settled — while adding Draw and Extract quietly invalidated it. Re-measuring put the real figure at 68 and the expansion delivered +3. On yesterday's number I would have skipped composition entirely. The habit to keep: when the system gains a capability, the *old measurements* are now suspect, not just the old code. Several other "settled" numbers in this log are probably stale for the same reason and worth re-running before being trusted again.
+
 ### Pipeline status today
 
 ```
-split         tasks  solved   accuracy  errors
-training       1000      56      5.60%       0
-evaluation      120       0      0.00%       0
+split         tasks  solved   accuracy  errors   runtime
+training       1000      59      5.90%       0      378s
+evaluation      120       0      0.00%       0       60s
 ```
 
-- training attribution: 39 synthesis, 17 sweep, induction precision 91% (43 rules offered)
-- synthesis operators: Draw 15, Recolor 10, Extract 7, Move 4, Remove 1, Remove→Recolor 1, Move→Recolor 1
+- training attribution: 42 synthesis, 17 sweep, induction precision 91% (46 rules offered)
+- synthesis operators: Draw 15, Recolor 10, Extract 7, Move 4, Recolor→Draw 2, Remove 1, Remove→Recolor 1, Draw→Remove 1
 - Tests 17/17, zero exceptions on either split
+- **Submission pipeline verified end to end** — `kaggle_notebook.py` produces a valid 240-task submission in 76s against a 12-hour limit, and the code is no longer machine-bound
 
 **Evaluation diagnosed properly for the first time.** 18 of 120 tasks ARE structurally observable (Draw 12, Move 4, Recolor 2) — and all 18 die at the same point: *no rule from pair 1*. Not a counterexample killing candidates, not a ranking problem — a single example cannot be explained. The other 102 no operator can even observe: 50 are same-shape but need more than one operator, 39 change shape without being an Extract, 11 change background colour, 2 exceed the object guards.
 
