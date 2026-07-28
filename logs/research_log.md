@@ -311,3 +311,59 @@ evaluation      120       0      0.00%       0      179s
   2. The 171 pure-addition tasks still unmatched by any of the 16 Draw forms
   3. Revisit `MAX_RELATIONAL_OBJECTS = 60` and `MAX_DRAW_OBJECTS = 40` — those perf guards were tuned on training-scale grids and will exclude eval-scale scenes, though they aren't the main blocker
 - Standing caveat to carry forward: everything above is training-split progress. Eval is 0 and getting it off 0 is a research problem, not a few more primitives
+## Session — July 28, 2026
+
+### What we did today
+
+Training 49/1000 → **56/1000 (5.60%)**. Evaluation still 0/120. Four changes shipped, three experiments rejected on measurement.
+
+**Extract operator — the output IS one of the input's objects (+5, later +7)**
+- Motivated by a structural blind spot: every synthesis observer routed through `_grids_comparable`, which returns None the moment shapes differ, so **316 of 951 unsolved tasks had never been looked at by induction at all**
+- Before building, measured the actual opportunity rather than trusting the bucket: of 230 shrinking tasks, only **15** have an output that literally equals a cropped object. The other 179 aren't windows of the input at all
+- Extract has NO value hole — the answer is the object itself — so it's the purest reuse of `induce_selectors` in the engine. Two crop forms (raw bbox window vs object isolated on background), chosen by induction
+- 5 correct at 83% precision, rising to 7 after the ranking fix below
+
+**Selector ranking: structure over measurement (+2)**
+- `72ca375d` found three selectors that explained every training pair identically: `height==2 AND is_sym_v` (wrong on test), `color_is_unique AND is_sym_v` (right), `not_is_single_pixel AND is_sym_v` (right). With equal atom counts the tie fell to catalog order and picked the metric one
+- `induce_selectors` now sorts by (atom count, metric-atom count). Same principle already proven on Move's decision lists, now applied to selection, so all five operators inherit it
+
+**Background gate relaxed (+1)**
+- `_grids_comparable` required input and output to share a background colour. But `get_background_color` returns the most FREQUENT colour, so recolouring a large region flips it even when the canvas never changed — rejecting 109 training and 11 evaluation tasks on a technicality before any operator looked at them
+- Now uses the input's background for both. Precision 90% → 91%
+
+**Escalating search budget (kept as a safety net, not a search lever)**
+- Implemented as specified: 2s per task, promoted to 15s once induction yields any candidate from pair 1 — the point at which a rule is known to exist in the language
+- But measurement showed induction is **not time-bound**: over 1000 failing `induce()` calls, median 0.75ms, max 325ms. Neither budget ever binds
+- Retained as a runaway guard, since two separate incidents have seen one task consume hours. It buys safety, not solutions
+
+### What didn't work (measured and rejected)
+
+- **Depth-3 conjunctions.** Found a selector in 1 of 43 depth-2 failures, and both programs it produced were wrong on test — `color==1 AND width==3 AND not_shape_is_unique`, three atoms, two of them metric. Widening the language again bought only new ways to overfit
+- **Candidate restarts.** Falling back through pair 1's ranked candidates when the top one fails refinement: zero tasks gained, same 56 solved, same 43 offered, same 91% precision
+- **Ten candidate selector atoms** probed against the seven Extract selector failures (`shape_is_most_common`, `is_densest`, `most_holes`, `n_colors_gt1`, …). **None separated the target in any of them**, so none were added. Inspection also showed the failure set was contaminated: `d9fac9be` is an observer false positive, where a 1×1 output is trivially reproduced by eight different objects
+
+### Key insight today
+
+**The refinement loop is evidence-driven, not path-dependent — and that rules out a whole category of future ideas.** `_refine_from` re-induces from ALL accumulated evidence at every counterexample, so the candidate set it chooses from by the final pair depends only on the evidence, not on which candidate the walk started from. Every restart converges to the same place. This is why candidate restarts gained nothing and structurally could not have. The consequence is general: **the only levers on induction are richer evidence or a better language, never better search over the language we already have.** That is worth remembering before building any future search machinery.
+
+**A net-zero result can be hiding a regression.** The selector ranking change first landed as 53 → 53, which reads as harmless. The per-operator breakdown showed Extract +2 and Move −2 — and Move's two hadn't become wrong, they had stopped producing any rule at all. Two independently-correct rules were fighting: ranking demotes `color==` as measurement-pinned, while geometric decision lists REQUIRE colour-keyed clauses, and that requirement was implemented as a check AFTER taking `selectors[0]`. Once ranking pushed colour atoms last, every geometric list was rejected. Fixed by filtering during selection rather than validating afterwards, so the constraint lives where the choice is made. Without the per-operator breakdown this would have shipped silently.
+
+**I misread machine contention as a code problem twice.** A run went 1h12m and I called it "the same signature as the earlier hang" — it was three of my own leftover Python processes competing for CPU. Later I quoted "+52% runtime" as the measured cost of candidate restarts when eval timings for identical work swung 131s → 317s → 2223s across runs. Correctness numbers were rock stable throughout (56 solved, 43 offered, 91% precision, every run). Lesson: **before attributing a timing change to code, check what else is running** — and never quote a precise cost figure from a contended measurement.
+
+**Bucket size keeps overestimating yield, now with a second filter identified.** Extract: 230 shrinking tasks → 15 exact form matches → 12 observable → 5 solved. Previously the gap was form-match; this time a second filter appeared behind it, the selector hole. Estimating from the widest number available has been wrong every single time.
+
+### Pipeline status today
+
+```
+split         tasks  solved   accuracy  errors
+training       1000      56      5.60%       0
+evaluation      120       0      0.00%       0
+```
+
+- training attribution: 39 synthesis, 17 sweep, induction precision 91% (43 rules offered)
+- synthesis operators: Draw 15, Recolor 10, Extract 7, Move 4, Remove 1, Remove→Recolor 1, Move→Recolor 1
+- Tests 17/17, zero exceptions on either split
+
+**Evaluation diagnosed properly for the first time.** 18 of 120 tasks ARE structurally observable (Draw 12, Move 4, Recolor 2) — and all 18 die at the same point: *no rule from pair 1*. Not a counterexample killing candidates, not a ranking problem — a single example cannot be explained. The other 102 no operator can even observe: 50 are same-shape but need more than one operator, 39 change shape without being an Extract, 11 change background colour, 2 exceed the object guards.
+
+- Next: the eval failure is now precisely located, and it is a language problem at the single-pair level. Getting off 0 needs concepts we do not have — indirection (a legend saying how to read the rest of the grid), multi-scale/fractal structure, counting and aggregation. Not more variants of what training rewards
