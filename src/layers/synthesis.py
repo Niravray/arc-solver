@@ -1360,8 +1360,14 @@ class DrawOperator:
     name = "Draw"
     induce_expr = None
 
+    def __init__(self, observe_fn=None):
+        # The tolerant observer is used when Draw is the FIRST stage of a
+        # composition, where insisting on a pure addition would reject
+        # every pair the composition exists to explain.
+        self._observe = observe_fn or observe_draw
+
     def observe(self, input_grid, output_grid):
-        return observe_draw(input_grid, output_grid)
+        return self._observe(input_grid, output_grid)
 
     def induce(self, evidence):
         observed = []
@@ -1641,6 +1647,62 @@ class ExtractOperator:
                 f"picked {sorted(picked)}")
 
 
+def observe_recolor_tolerant(input_grid, output_grid):
+    """
+    Label ONLY the recolourings, tolerating other changes in the pair.
+
+    An object counts as recoloured when its exact pixels are still
+    occupied in the output by a different colour. Objects that vanished,
+    moved or appeared are simply not this stage's business and are left
+    as negatives for a later stage to explain.
+    """
+    background = _grids_comparable(input_grid, output_grid)
+    if background is None:
+        return None
+
+    in_objs = scene_objects(input_grid, background)
+    if not in_objs:
+        return None
+
+    positives, negatives = [], []
+    for obj in in_objs:
+        colors = {int(output_grid[r, c]) for (r, c) in obj["pixels"]}
+        if len(colors) == 1:
+            new_color = next(iter(colors))
+            if new_color != obj["color"] and new_color != background:
+                positives.append((obj, new_color))
+                continue
+        negatives.append(obj)
+
+    if not positives:
+        return None
+    return in_objs, positives, negatives, background, input_grid
+
+
+def observe_draw_tolerant(input_grid, output_grid):
+    """
+    Report the cells that APPEARED, tolerating other changes.
+
+    observe_draw insists the pair is a pure addition; as a first
+    composition stage that is too strict, since the whole point is that
+    something else also happened. Only background cells that became
+    non-background are reported.
+    """
+    background = _grids_comparable(input_grid, output_grid)
+    if background is None:
+        return None
+
+    added = (input_grid == background) & (output_grid != background)
+    if not added.any():
+        return None
+
+    objs = scene_objects(input_grid, background)
+    if not objs or len(objs) > MAX_DRAW_OBJECTS:
+        return None
+
+    return objs, added, background, input_grid, output_grid
+
+
 class ComposedProgram:
     """Two rules applied in sequence."""
 
@@ -1848,10 +1910,24 @@ class ComposedOperator:
 DRAW    = DrawOperator()
 EXTRACT = ExtractOperator()
 
+RECOLOR_FIRST = Operator("Recolor", observe_recolor_tolerant, RecolorProgram,
+                         induce_color_exprs)
+DRAW_FIRST    = DrawOperator(observe_draw_tolerant)
+
+# All ordered pairs of a tolerant first stage and a strict second stage.
+# The first-stage set grew from two to four once Draw and Recolor got
+# tolerant observers, and that is what re-opened composition: measured on
+# the unsolved training tasks, multi-concept tasks reachable by composing
+# the current operators went from 13 to 68, almost entirely because
+# APPEAR became expressible once Draw existed.
+_FIRST_STAGES  = [REMOVE_FIRST, MOVE_FIRST, RECOLOR_FIRST, DRAW_FIRST]
+_SECOND_STAGES = [RECOLOR, REMOVE, MOVE, DRAW]
+
 COMPOSED_OPERATORS = [
-    ComposedOperator(REMOVE_FIRST, RECOLOR),
-    ComposedOperator(REMOVE_FIRST, MOVE),
-    ComposedOperator(MOVE_FIRST,   RECOLOR),
+    ComposedOperator(first, second)
+    for first in _FIRST_STAGES
+    for second in _SECOND_STAGES
+    if first.name != second.name
 ]
 
 # Single operators are tried first: when both can explain a task, the
