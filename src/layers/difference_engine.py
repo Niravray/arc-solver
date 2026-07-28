@@ -1,7 +1,17 @@
-import numpy as np
+import os
 import sys
+from pathlib import Path
 
-sys.path.append(r"C:\arc_solver\src\layers")
+# Portable path bootstrap. Kaggle runs this on Linux under /kaggle, so
+# absolute Windows paths cannot be baked in anywhere -- locations are
+# derived from this file instead.
+_SRC_DIR = Path(__file__).resolve().parent.parent
+for _p in (_SRC_DIR / "layers", _SRC_DIR / "primitives"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import numpy as np
+
 from task_loader import load_all_tasks, get_task_ids
 from object_extractor import extract_objects, get_background_color
 from property_encoder import encode_all_objects

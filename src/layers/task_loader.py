@@ -1,6 +1,7 @@
 import json
 import numpy as np
 import os
+from pathlib import Path
 
 # ============================================================
 # ARC TASK LOADER
@@ -12,7 +13,32 @@ import os
 # - A NumPy array is just a grid of numbers (0-9 for colors)
 # ============================================================
 
-DATA_PATH = r"C:\arc_solver\data"
+def _find_data_dir():
+    """
+    Locate the ARC json files without hardcoding a machine.
+
+    Order: an explicit ARC_DATA_DIR override, then any Kaggle input
+    directory containing arc-agi files (the competition dataset is
+    mounted read-only under /kaggle/input/<name>/ and the name changes
+    between competition years), then the repo's own data/ folder.
+    """
+    override = os.environ.get("ARC_DATA_DIR")
+    if override and os.path.isdir(override):
+        return override
+
+    kaggle_input = "/kaggle/input"
+    if os.path.isdir(kaggle_input):
+        for entry in sorted(os.listdir(kaggle_input)):
+            candidate = os.path.join(kaggle_input, entry)
+            if not os.path.isdir(candidate):
+                continue
+            if any(f.startswith("arc-agi") for f in os.listdir(candidate)):
+                return candidate
+
+    return str(Path(__file__).resolve().parent.parent.parent / "data")
+
+
+DATA_PATH = _find_data_dir()
 
 def load_task(task_id, split="training"):
     """

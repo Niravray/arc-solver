@@ -1,11 +1,21 @@
+import os
+import sys
+from pathlib import Path
+
+# Portable path bootstrap. Kaggle runs this on Linux under /kaggle, so
+# absolute Windows paths cannot be baked in anywhere -- locations are
+# derived from this file instead.
+_SRC_DIR = Path(__file__).resolve().parent.parent
+for _p in (_SRC_DIR / "layers", _SRC_DIR / "primitives"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
 import numpy as np # type: ignore
 import sys
 import json
 import os
 import collections
 
-sys.path.append(r"C:\arc_solver\src\layers")
-sys.path.append(r"C:\arc_solver\src\primitives")
 
 from task_loader import load_all_tasks, get_task_ids, load_solutions
 from object_extractor import extract_objects, get_background_color
@@ -319,10 +329,18 @@ def build_kaggle_submission(tasks, task_ids, verbose=False):
     return submission
 
 
-def save_submission(submission, path=r"C:\arc_solver\submission.json"):
+def _default_submission_path():
+    """Kaggle scores whatever lands in /kaggle/working/submission.json."""
+    if os.path.isdir("/kaggle/working"):
+        return "/kaggle/working/submission.json"
+    return str(Path(__file__).resolve().parent.parent.parent / "submission.json")
+
+
+def save_submission(submission, path=None):
     """
     Save the submission to a JSON file.
     """
+    path = path or _default_submission_path()
     with open(path, "w") as f:
         json.dump(submission, f)
     print(f"Submission saved to {path}")
@@ -535,12 +553,14 @@ def print_evaluation_summary(results, total_duration):
                 print(f"  {r['task_id']}")
 
 
-def save_evaluation_results(results, path=r"C:\arc_solver\logs\full_evaluation_results.json"):
+def save_evaluation_results(results, path=None):
     """
     Saves the full per-task results list as JSON for later analysis --
     grids, timings, failure reasons, tracebacks, all of it, not just the
     summary printed to console.
     """
+    path = path or str(Path(__file__).resolve().parent.parent.parent
+                       / "logs" / "full_evaluation_results.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         json.dump(results, f, indent=2)
