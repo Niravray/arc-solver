@@ -119,6 +119,16 @@ def solve_task(task):
         program, operator_name = None, None
     induced = _synthesis_prediction(program, test_input)
 
+    # An induced rule that also explains every training pair is a better
+    # second attempt than an unrelated sweep hypothesis: the pairs cannot
+    # distinguish it from the winner, so it is a genuinely different
+    # reading of the same evidence rather than a worse one.
+    induced_alternates = []
+    for alternate in getattr(program, "alternates", []) or []:
+        grid = _synthesis_prediction(alternate, test_input)
+        if grid is not None:
+            induced_alternates.append(grid)
+
     # Source 2: sweep the prebuilt hypothesis list.
     swept = []
     sweep_name = None
@@ -130,7 +140,8 @@ def solve_task(task):
     except Exception:
         swept = []
 
-    predictions = _merge_predictions([induced] + list(swept), test_input)
+    predictions = _merge_predictions(
+        [induced] + induced_alternates + list(swept), test_input)
 
     if induced is not None and sweep_name:
         method = f"synthesis:{operator_name}+sweep:{sweep_name}"
@@ -267,6 +278,11 @@ def solve_task_all_test_inputs(task):
         test_input = test_item["input"]
 
         induced = _synthesis_prediction(program, test_input)
+        induced_alternates = []
+        for alternate in getattr(program, "alternates", []) or []:
+            grid = _synthesis_prediction(alternate, test_input)
+            if grid is not None:
+                induced_alternates.append(grid)
 
         swept, sweep_name = [], None
         if verified:
@@ -276,7 +292,8 @@ def solve_task_all_test_inputs(task):
             except Exception:
                 swept = []
 
-        predictions = _merge_predictions([induced] + list(swept), test_input)
+        predictions = _merge_predictions(
+            [induced] + induced_alternates + list(swept), test_input)
 
         if induced is not None and sweep_name:
             method = f"synthesis:{operator_name}+sweep:{sweep_name}"
