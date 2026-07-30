@@ -83,23 +83,40 @@ class SceneReadingTests(unittest.TestCase):
         # a panel's colour is its dominant non-background colour
         self.assertEqual({p["color"] for p in panels}, {1, 3})
 
-    def test_uniform_panels_defeat_separator_detection(self):
+    def test_solid_colour_panels_are_split_correctly(self):
         """
-        KNOWN LIMITATION, pinned so it is not mistaken for a regression.
+        Regression for a bug found while writing these tests.
 
-        find_separator_lines flags any uniform non-background line, but a
-        solid-coloured panel's own columns are uniform too -- so a grid of
-        solid blocks has every column flagged, no segment survives, and no
-        panel is produced. Found while writing these tests. Separator
-        detection needs to distinguish a divider from a panel interior
-        (e.g. by requiring the line to span the full grid AND its colour
-        to appear nowhere else) before panels can handle solid-block
-        layouts.
+        A solid panel's own columns are uniform, so the old detector
+        flagged every column as a divider, left no gaps, and produced no
+        panels at all. The fix picks the colour whose lines actually
+        PARTITION the grid: here colour 5 cuts it in two, while colours 1
+        and 2 sit in consecutive runs that cut nothing.
         """
         g = grid(["11522", "11522"])
-        _rows, cols = find_separator_lines(g, 0)
-        self.assertEqual(cols, [0, 1, 2, 3, 4])
+        rows, cols = find_separator_lines(g, 0)
+        self.assertEqual(rows, [])
+        self.assertEqual(cols, [2])
+
+        panels = extract_panels(g, 0)
+        self.assertEqual(len(panels), 2)
+        self.assertEqual({p["color"] for p in panels}, {1, 2})
+
+    def test_adjacent_stripes_are_not_dividers(self):
+        # Two solid stripes side by side: every column is uniform, but no
+        # colour PARTITIONS the grid -- each sits at an edge and leaves one
+        # piece. So no dividers, rather than four bogus ones.
+        g = grid(["1122", "1122"])
+        rows, cols = find_separator_lines(g, 0)
+        self.assertEqual((rows, cols), ([], []))
         self.assertEqual(extract_panels(g, 0), [])
+
+    def test_a_thick_divider_is_still_found(self):
+        # Dividers are not always one cell wide; a two-wide band that
+        # separates content on both sides still partitions.
+        g = grid(["10550301", "01550130"])
+        _rows, cols = find_separator_lines(g, 0)
+        self.assertEqual(cols, [2, 3])
 
     def test_panels_returns_nothing_without_separators(self):
         self.assertEqual(extract_panels(grid(["11", "22"]), 0), [])

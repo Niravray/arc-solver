@@ -814,19 +814,64 @@ _ACTIVE_INTERPRETATION = {"connectivity": 4}
 _in_region_split = False
 
 
+def _segment_count(lines, extent):
+    """How many non-empty runs `lines` cuts [0, extent) into."""
+    count, start = 0, 0
+    for line in sorted(lines) + [extent]:
+        if line > start:
+            count += 1
+        start = line + 1
+    return count
+
+
 def find_separator_lines(grid, background):
     """
-    Rows and columns that are a single non-background colour all the way
-    across -- the dividers that split a grid into panels.
+    Rows and columns that divide the grid into panels.
+
+    Being a uniform non-background line is necessary but NOT sufficient:
+    a solid-coloured panel's own rows and columns are uniform too, so
+    flagging every uniform line marks the panels as dividers alongside
+    the real one. On a grid of solid blocks that leaves no gaps at all
+    and no panel survives -- which is the bug this replaces.
+
+    What actually separates a divider from a panel interior is that a
+    divider PARTITIONS the grid while a panel interior does not: panel
+    columns come in consecutive runs, dividers stand alone between
+    content. So candidates are grouped by colour and the colour whose
+    lines cut the grid into the most pieces wins. Dividers in a real
+    separator grid share one colour, which is what makes a single choice
+    the right shape for this.
+
+    Returns ([], []) when no colour actually partitions anything.
     """
     rows, cols = grid.shape
-    row_lines = [r for r in range(rows)
-                 if len(set(int(v) for v in grid[r, :])) == 1
-                 and int(grid[r, 0]) != background]
-    col_lines = [c for c in range(cols)
-                 if len(set(int(v) for v in grid[:, c])) == 1
-                 and int(grid[0, c]) != background]
-    return row_lines, col_lines
+
+    row_by_colour, col_by_colour = {}, {}
+    for r in range(rows):
+        values = {int(v) for v in grid[r, :]}
+        if len(values) == 1:
+            colour = values.pop()
+            if colour != background:
+                row_by_colour.setdefault(colour, []).append(r)
+    for c in range(cols):
+        values = {int(v) for v in grid[:, c]}
+        if len(values) == 1:
+            colour = values.pop()
+            if colour != background:
+                col_by_colour.setdefault(colour, []).append(c)
+
+    best_lines = ([], [])
+    best_pieces = 1          # must beat "the whole grid is one piece"
+    for colour in sorted(set(row_by_colour) | set(col_by_colour)):
+        row_lines = row_by_colour.get(colour, [])
+        col_lines = col_by_colour.get(colour, [])
+        pieces = (_segment_count(row_lines, rows)
+                  * _segment_count(col_lines, cols))
+        if pieces > best_pieces:
+            best_pieces = pieces
+            best_lines = (row_lines, col_lines)
+
+    return best_lines
 
 
 def extract_panels(grid, background):
