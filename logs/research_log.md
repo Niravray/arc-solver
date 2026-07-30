@@ -385,3 +385,48 @@ evaluation      120       0      0.00%       0       60s
 **Evaluation diagnosed properly for the first time.** 18 of 120 tasks ARE structurally observable (Draw 12, Move 4, Recolor 2) — and all 18 die at the same point: *no rule from pair 1*. Not a counterexample killing candidates, not a ranking problem — a single example cannot be explained. The other 102 no operator can even observe: 50 are same-shape but need more than one operator, 39 change shape without being an Extract, 11 change background colour, 2 exceed the object guards.
 
 - Next: the eval failure is now precisely located, and it is a language problem at the single-pair level. Getting off 0 needs concepts we do not have — indirection (a legend saying how to read the rest of the grid), multi-scale/fractal structure, counting and aggregation. Not more variants of what training rewards
+
+> **CORRECTION (July 30).** The "indirection" claim above is wrong and was disproven by measurement the next day: **0 of 120 evaluation tasks** have the indirection shape (a value that varies across pairs and is readable from elsewhere in the scene). Worse, the task I built the claim on — `abc82100`, which I kept calling "the legend task" — is not a legend task at all. I read pair 1 (`12888` looking like a colour key) and generalised; across its four pairs row 0 is variously cleared, filled from empty, and colour-swapped. Extrapolating from one example, while writing log entries warning against extrapolating from one example.
+
+## Session — July 29-30, 2026
+
+### What we did today
+
+Training 59/1000 → **64/1000 (6.40%)**. Evaluation still 0/120. One audit, five fixes, three capabilities that didn't pay, and two of my own misdiagnoses.
+
+**Audited the pipeline for flaws and fixed five (+5 tasks)**
+1. **The solver committed to one definition of "object"** — the big one. `scene_objects` always used 4-connectivity. Measured: 324 unsolved tasks are observable under it, and **10 more become observable only under 8-connectivity**, silently locked out. The June 16 entry decided to "preserve alternative interpretations rather than committing early" and the synthesis engine then committed early anyway. Interpretation is now something the solver **searches over**, verification picking the reading exactly as it picks every other hole. Earned 3 tasks (`Extract@connected8`) + 1 (`Extract@panels`)
+2. **Background was an unvalidated guess** — most-frequent colour, which is wrong when a large object dominates a small canvas, and then everything downstream is wrong with nothing raised. Added a runner-up candidate
+3. **No panel structure** — 21/120 eval tasks are separator-divided grids where the separator read as just another object. Panels are now an interpretation giving one pseudo-object per panel, so every operator applies unchanged. 24 of 29 separator-bearing eval tasks extract panels. Fixing #1 first is what made this cheap — panels became a list entry, not a subsystem
+4. **Guards tuned to the wrong split** — 60/40/80 → 120/90/150
+5. **Attempt 2 was spent on the sweep** even when induction had a runner-up that also explained every pair
+
+**Applicability gating (6.2× speedup, zero cost).** Applying every interpretation to every task cost 12.6× runtime (389s → 4902s) for those five tasks, because almost every grid has no separators and reads identically under both connectivities — so the retries re-derived identical objects and re-ran identical failed inductions. Gating each on one cheap extraction or separator scan: **4902s → 794s, all five tasks kept.**
+
+**Region splitting — built, measured, disabled.** Isolates an auxiliary edge strip, solves the remainder, reassembles. Motivated by a real signal: stripping `abc82100`'s top row moved it from "no operator can observe this" to "observable by six composed operators". Result: fires on **180** unsolved training tasks and **27** eval tasks, produces **zero** rules, costs 3.3× runtime. The reason is in the modes — **159 of the 180 are "preserve"**, where the strip is *identical* in input and output, so cropping it away is a no-op by construction and the remainder is the same rule at the same difficulty. Only "clear" splits can simplify: 21 training, 1 eval
+
+**Threw an hour of compute at one task — answered in 1 second.** 51 combinations (3 interpretations × 17 operators, 3-atom conjunctions, raised per-task budgets, restarts on) against `abc82100`. **All 51 died at "nothing from pair 1" in one second.** Not the search giving up — the search never *starting*: every observer fails to describe the pair, so there are no holes to solve and a budget has nothing to buy. An hour, a day, a week: identical. This cleanly rules out the entire "more compute" direction
+
+### Key insight today
+
+**Three additions made structure VISIBLE without making it SOLVABLE.** Panels, the raised guards, and region splitting — each cost real runtime, each gained ~nothing. Set against what *did* work all week (Draw's form registry +12, Extract +7, composition +3, gravity, shift), the pattern is unambiguous: **the gap is not in how the solver reads grids, it is in what it can do once it has read them.** Every future idea should be checked against this before building — "does this let the solver *see* more, or *do* more?" Only the second has ever paid.
+
+**Compute is not the constraint, and now that is measured rather than assumed.** The one-hour experiment is the cleanest negative result of the project: failures happen at *observation*, before any search begins. That retires the whole family of "search harder / longer / wider" proposals, including the escalating budget and candidate restarts from yesterday.
+
+**I mischaracterised a task from one example and built several turns on it.** `abc82100` is not a legend task — I read pair 1, saw `12888`, called it a colour key, and told the user eval needs indirection. Its four pairs do three different things to row 0. The indirection measurement (0/120) had already contradicted me and I kept the label anyway. The correction is written into the July 28 entry above. **When a measurement contradicts an earlier claim, go back and revise the claim, not just the next decision.**
+
+**I misattributed runtime to code for the third time.** An overnight run reported 38012s for training; a clean re-run of the identical code reported **914s** — a 42× swing. The tell was available immediately: *evaluation in that same run took 266s*, and a genuine regression would have slowed both. Environment first, code second.
+
+### Pipeline status today
+
+```
+split         tasks  solved   accuracy  errors   runtime
+training       1000      64      6.40%       0      914s
+evaluation      120       0      0.00%       0      150s
+```
+
+- attribution: 47 synthesis, 17 sweep, induction precision 90% (52 rules offered)
+- operators: Draw 16, Recolor 10, Extract 7, Move 4, Extract@connected8 3, Recolor→Draw 2, Extract@panels 1, Remove 1, Remove→Recolor 1
+- Tests 17/17, zero exceptions on either split
+- **Flags now off by default, each with its measurement in-code:** `USE_RELATIONAL_ATOMS`, `USE_REGION_SPLIT`, `MAX_CANDIDATE_RESTARTS=1`, `MAX_CONJUNCTION=2`
+- Next: on the evidence above, the only direction with a track record is new **operators and forms** — things that let the solver *do* more. Anything that only lets it *see* more should be measured before it is built, not after
