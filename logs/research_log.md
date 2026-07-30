@@ -430,3 +430,39 @@ evaluation      120       0      0.00%       0      150s
 - Tests 17/17, zero exceptions on either split
 - **Flags now off by default, each with its measurement in-code:** `USE_RELATIONAL_ATOMS`, `USE_REGION_SPLIT`, `MAX_CANDIDATE_RESTARTS=1`, `MAX_CONJUNCTION=2`
 - Next: on the evidence above, the only direction with a track record is new **operators and forms** — things that let the solver *do* more. Anything that only lets it *see* more should be measured before it is built, not after
+
+## Session — July 30, 2026 (continued)
+
+### What we did
+
+Training 64/1000 → **72/1000 (7.20%)**, precision 90% → **92%**. Evaluation still 0/120.
+
+- **Added tests for `synthesis.py`, which had none** — 17 → 46 tests. The file is ~2700 lines and produces 58 of the 72 solves, and nothing imported it; every change all week was validated only by the accuracy number not dropping, which had already been shown to hide a regression. Tests pin the structural-over-metric ranking, the colour-key restriction on geometric decision lists, that observers *reject* pairs they cannot explain, the loop's core invariant (any returned rule reproduces every training output), and the four measured-off flags
+- **Writing the tests found a real bug**, now fixed: `find_separator_lines` treated every uniform non-background line as a divider, but a solid-coloured panel's own columns are uniform too — so a grid of solid blocks had every column flagged, no segment survived, and no panel was produced. The panels interpretation silently did nothing on exactly the layouts it was built for. Fixed by picking the colour whose lines actually *partition* the grid. Detection went from contradictory (29 detected / 24 extracted) to consistent (24/24 eval, 151/151 training)
+- **Used the two extraction strategies built on June 16 and never wired in** — `by_color` and `no_background`, unused for six weeks. **+8 tasks**, the biggest single gain since the Draw form registry
+- Three-stage composition added in the same batch: **contributed 0**
+- Answered two open questions: attempt-2 alternates **[measured]** 29 solved tasks had alternates, **0 were ever saved by one**; the guard raise earns exactly **1** task
+- Wrote `CLAUDE.md` (working context for a fresh session) and `docs/RESEARCH_AGENDA.md` (24 flaws across six tiers, with what to research for each)
+
+### Key insight today
+
+**I wrote a rule into `CLAUDE.md` and disproved it within the hour.** The rule was *"does this let the solver SEE more or DO more — only the second has ever paid"*, generalised from panels, raised guards and region splitting all gaining ~nothing. Then `no_background` and `by_color` — pure changes to how grids are read — added 8 tasks in one run.
+
+The corrected rule is narrower and fits all the evidence: **regrouping the same pixels into different objects pays (14 tasks: `no_background` 9, `connected8` 3, `by_color` 2); making extra structure visible without changing the grouping does not (panels 1, region split 0, guards 1).** The distinction is whether the *object set itself* changes, not whether the solver "sees more".
+
+Worth noting how the wrong rule formed: three consecutive negative results, all in one narrow direction, generalised into a law. Three data points in the same corner of the space is not a law — and I had just spent two days warning about exactly this failure mode in the task-level measurements.
+
+**Two capabilities sat built, tested and unused for six weeks.** `by_color` and `no_background` were written on June 16, with a log entry that day explicitly deciding to "use multiple object extraction strategies in parallel". They were then never called. That is now the second time this project has found significant value in code it had already written and forgotten (the relational subsystem on July 26 was the first, +1 task). **Before building anything new, check what is already in the repo and unwired.**
+
+### Pipeline status
+
+```
+split         tasks  solved   accuracy  errors
+training       1000      72      7.20%       0
+evaluation      120       0      0.00%       0
+```
+
+- attribution: 58 synthesis, 14 sweep, induction precision 92% (63 rules offered)
+- interpretations now searched: `connected4`, `connected8`, `by_color`, `no_background`, `panels` — **the second-largest source of solves in the project**
+- tests 46/46; submission pipeline verified; code portable to Kaggle
+- Next: see `docs/RESEARCH_AGENDA.md`. The cheapest high-value item is a held-out split *within* training — all 1000 tasks are currently used both to design and to score, so 7.20% is optimistic even for unseen tasks of the same difficulty

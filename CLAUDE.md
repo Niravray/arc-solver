@@ -13,7 +13,8 @@ evaluation      120       0      0.00%
 ```
 
 Induction precision 92% (63 rules offered, 58 correct). 46 tests passing.
-A clean full run is ~900s training + ~150s eval.
+A clean full run is ~900s training + ~150s eval, though timings on
+this machine swing wildly (see rule 7).
 
 **The evaluation number is the one that counts** — Kaggle's test set comes
 from that distribution, not training's. Training is the iteration target
@@ -31,9 +32,9 @@ py kaggle_notebook.py                    # build submission.json (240 tasks, ~76
 ## Architecture
 
 Two independent solvers, merged rather than competing. They overlap on
-**one task out of 64**, and ARC allows two attempts, so both stay:
+**one task out of 72**, and ARC allows two attempts, so both stay:
 
-- **`src/layers/synthesis.py`** (2582 lines) — the main engine. Solves 47.
+- **`src/layers/synthesis.py`** (~2700 lines) — the main engine.
   Induces a rule per task: defines a *language* of expressions with
   *holes*, then solves the holes from the observed change. Counterexample-
   guided — induce from pair 1, test on pair 2, absorb any pair that
@@ -41,7 +42,7 @@ Two independent solvers, merged rather than competing. They overlap on
   Operators: Recolor, Remove, Move, Draw, Extract, plus 14 composed.
   Solves 58 of the 72.
   Attempt 1 comes from here.
-- **`src/layers/verifier.py`** — the older sweep. Solves 17. Generates a
+- **`src/layers/verifier.py`** — the older sweep. Solves 14. Generates a
   list of complete pre-parameterised rules and keeps whatever verifies.
   Attempt 2 comes from here.
 
