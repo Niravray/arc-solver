@@ -810,6 +810,9 @@ SCENE_INTERPRETATIONS = [
 
 _ACTIVE_INTERPRETATION = {"connectivity": 4}
 
+# Guards against a region-split task recursively splitting again.
+_in_region_split = False
+
 
 def find_separator_lines(grid, background):
     """
@@ -2294,6 +2297,164 @@ def _find_alternates(winner, candidates, pairs, limit=2):
     return out
 
 
+# ============================================================
+# REGION SPLITTING
+#
+# Not a scene interpretation -- those change how a grid is read into
+# objects, whereas this changes WHICH PART OF THE GRID the rule is about
+# at all. Some grids carry an auxiliary strip (a border, a key, a
+# scratch row) that is not part of the scene the rule transforms.
+# Measured on abc82100: with its top row removed, a task no operator
+# could even OBSERVE became observable by six composed operators. So
+# segmentation converts "cannot describe this" into "can describe it",
+# which is the precondition for solving anything.
+#
+# Only splits whose auxiliary strip behaves CONSISTENTLY across every
+# training pair are considered -- either untouched, or blanked. If the
+# strip changes in some content-dependent way, cropping it away throws
+# out part of the rule rather than isolating it.
+# ============================================================
+
+# Off by default. Measured: it fires on 180 unsolved training tasks and
+# 27 evaluation tasks -- so finding a consistent auxiliary strip is not
+# the hard part -- yet it produced ZERO rules, for 3.3x runtime
+# (794s -> 2640s).
+#
+# The breakdown explains it: 159 of those 180 splits are "preserve",
+# where the strip is IDENTICAL in input and output. Cropping away
+# something that never changes does not simplify the task -- the rule on
+# the remainder is the same rule at the same difficulty -- so those
+# splits are near no-ops by construction. Only "clear" splits can
+# genuinely simplify, and there are 21 training / 1 evaluation.
+#
+# So segmentation was never the bottleneck; what remains after cropping
+# is still beyond the operators. Kept because the machinery is correct
+# and would matter if the operator set ever caught up, but it is not
+# earning its runtime today.
+USE_REGION_SPLIT = False
+
+MAX_STRIP_WIDTH = 2
+
+
+def _candidate_splits(pairs):
+    """
+    Crop boxes worth trying, as (name, (r0, r1, c0, c1), aux_mode).
+
+    Only edge strips: an auxiliary region in the middle of a grid is
+    what the panels interpretation is for.
+    """
+    rows, cols = pairs[0][0].shape
+    out = []
+    for width in range(1, MAX_STRIP_WIDTH + 1):
+        if rows - width >= 2:
+            out.append((f"drop_top{width}", (width, rows, 0, cols)))
+            out.append((f"drop_bottom{width}", (0, rows - width, 0, cols)))
+        if cols - width >= 2:
+            out.append((f"drop_left{width}", (0, rows, width, cols)))
+            out.append((f"drop_right{width}", (0, rows, 0, cols - width)))
+    return out
+
+
+def _aux_mode(pairs, box):
+    """
+    How the cropped-away strip behaves across every pair: "preserve" if
+    it is identical in input and output, "clear" if it always becomes
+    background, None if it is inconsistent (in which case the split is
+    hiding part of the rule rather than isolating it).
+    """
+    r0, r1, c0, c1 = box
+    preserved, cleared = True, True
+    for input_grid, output_grid in pairs:
+        if input_grid.shape != output_grid.shape:
+            return None
+        background = get_background_color(input_grid)
+        mask = np.ones(input_grid.shape, dtype=bool)
+        mask[r0:r1, c0:c1] = False
+        if not np.array_equal(input_grid[mask], output_grid[mask]):
+            preserved = False
+        if not np.all(output_grid[mask] == background):
+            cleared = False
+        if not (preserved or cleared):
+            return None
+    return "preserve" if preserved else ("clear" if cleared else None)
+
+
+class RegionSplitProgram:
+    """Solve inside a sub-rectangle, then put the grid back together."""
+
+    operator_name = "RegionSplit"
+
+    def __init__(self, box, aux_mode, inner, inner_name):
+        self.box = box
+        self.aux_mode = aux_mode
+        self.inner = inner
+        self.inner_name = inner_name
+        self.selector = None
+        self.expr = None
+
+    def apply(self, grid, background):
+        r0, r1, c0, c1 = self.box
+        if r1 > grid.shape[0] or c1 > grid.shape[1]:
+            return None
+        sub = grid[r0:r1, c0:c1]
+        inner_out = self.inner.apply(sub, get_background_color(sub))
+        if inner_out is None or inner_out.shape != sub.shape:
+            return None
+
+        result = grid.copy() if self.aux_mode == "preserve" else \
+            np.full_like(grid, background)
+        result[r0:r1, c0:c1] = inner_out
+        return result
+
+    def __repr__(self):
+        return (f"RegionSplit({self.box}, aux={self.aux_mode}) "
+                f"THEN {self.inner}")
+
+
+def synthesize_region_split(task, operators=None):
+    """
+    Try isolating an auxiliary edge strip, then solving what remains.
+
+    Runs only as a fallback, after ordinary synthesis has failed, since
+    each split costs a full induction pass over the cropped task.
+    """
+    pairs = [(p["input"], p["output"]) for p in task["train"]]
+    if any(i.shape != o.shape for i, o in pairs):
+        return None, None
+    if len({i.shape for i, _ in pairs}) != 1:
+        return None, None      # boxes are per-shape; keep it simple
+
+    for name, box in _candidate_splits(pairs):
+        mode = _aux_mode(pairs, box)
+        if mode is None:
+            continue
+
+        r0, r1, c0, c1 = box
+        cropped = {
+            "train": [{"input": i[r0:r1, c0:c1], "output": o[r0:r1, c0:c1]}
+                      for i, o in pairs],
+            "test": [{"input": t["input"][r0:r1, c0:c1]}
+                     for t in task["test"]],
+        }
+        try:
+            inner, inner_name = synthesize_program(cropped, operators)
+        except Exception:
+            continue
+        if inner is None:
+            continue
+
+        program = RegionSplitProgram(box, mode, inner, inner_name)
+        if all(
+            (lambda got: got is not None and got.shape == o.shape
+             and np.array_equal(got, o))
+            (program.apply(i, get_background_color(i)))
+            for i, o in pairs
+        ):
+            return program, f"RegionSplit[{name}]->{inner_name}"
+
+    return None, None
+
+
 def _interpretation_applies(name, task):
     """
     Cheap pre-check: could this reading of the grid possibly differ from
@@ -2369,6 +2530,22 @@ def synthesize_program(task, operators=None):
         pass
 
     set_scene_interpretation(SCENE_INTERPRETATIONS[0][1])
+
+    # Fallback: maybe part of the grid is not the scene at all.
+    # Guarded by _in_region_split so a cropped task cannot recurse into
+    # cropping itself.
+    global _in_region_split
+    if USE_REGION_SPLIT and not _in_region_split:
+        _in_region_split = True
+        try:
+            program, name = synthesize_region_split(task, operators)
+        except Exception:
+            program, name = None, None
+        finally:
+            _in_region_split = False
+        if program is not None:
+            return program, name
+
     return None, None
 
 
