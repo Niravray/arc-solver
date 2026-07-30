@@ -1,7 +1,7 @@
 # Flaws, bottlenecks and research directions
 
 Every item below is a real limitation of the solver as of 2026-07-30
-(64/1000 training, 0/120 evaluation). Measured claims are marked
+(72/1000 training, 0/120 evaluation). Measured claims are marked
 **[measured]**; the rest is analysis and should be treated as a hypothesis
 to test, not a fact.
 
@@ -213,7 +213,7 @@ given #7 says search order is not what limits correctness).
 
 All 1000 training tasks are used both to design the solver and to score
 it. Every form, atom, cost heuristic and threshold was chosen by looking
-at those tasks. **So 6.40% is optimistic even as a measure of
+at those tasks. **So 7.20% is optimistic even as a measure of
 "generalises to unseen tasks of this difficulty."**
 
 **Fix:** split training into dev/holdout, tune only on dev, report both.

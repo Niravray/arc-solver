@@ -1,3 +1,21 @@
+"""
+Graph correspondence engine.
+
+STATUS: built and unit-tested, NOT wired into the solver.
+
+It compares relationship graphs between an input and output across
+every shared extraction strategy and ranks the readings by how
+completely their nodes correspond. Deliberately left unused rather
+than deleted: the measured gap in the solver is not in how grids
+are READ -- three additions of that kind (panels, raised guards,
+region splitting) each made structure visible while solving
+nothing -- so wiring another one in is the lowest-value option
+available. It is kept because a correspondence score is the
+natural input to the two-level rules the solver actually lacks,
+where "which objects correspond" has to be answered before "what
+was derived from them".
+"""
+
 from collections import Counter
 from typing import Any, TypedDict
 

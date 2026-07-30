@@ -8,11 +8,11 @@ Python 3.14, NumPy, SciPy. Run everything with `py`, not `python`.
 
 ```
 split         tasks  solved   accuracy
-training       1000      64      6.40%
+training       1000      72      7.20%
 evaluation      120       0      0.00%
 ```
 
-Induction precision 90% (52 rules offered, 47 correct). 46 tests passing.
+Induction precision 92% (63 rules offered, 58 correct). 46 tests passing.
 A clean full run is ~900s training + ~150s eval.
 
 **The evaluation number is the one that counts** — Kaggle's test set comes
@@ -39,6 +39,7 @@ Two independent solvers, merged rather than competing. They overlap on
   guided — induce from pair 1, test on pair 2, absorb any pair that
   disproves the rule into the evidence and re-induce.
   Operators: Recolor, Remove, Move, Draw, Extract, plus 14 composed.
+  Solves 58 of the 72.
   Attempt 1 comes from here.
 - **`src/layers/verifier.py`** — the older sweep. Solves 17. Generates a
   list of complete pre-parameterised rules and keeps whatever verifies.
@@ -51,7 +52,8 @@ Supporting layers: `task_loader` → `object_extractor` → `property_encoder`
 ### Scene interpretations
 
 "What counts as an object" is *searched over*, not assumed: `connected4`,
-`connected8`, `by_color`, `no_background`, `panels`. Each is gated by a
+`connected8`, `by_color`, `no_background`, `panels`. **This axis is the
+second-biggest source of solves in the project.** Each is gated by a
 cheap applicability check — trying all of them on every task once cost
 12.6× runtime for nothing, because most grids read identically under
 several. A winning interpretation is deliberately left **active** so the
@@ -91,9 +93,13 @@ wired in — see its docstring.
 7. **Environment before code on timing.** Misattributed machine
    contention/throttling to code three times; one run read 38012s vs 914s
    clean, a 42× swing on identical code.
-8. **Does this let the solver SEE more, or DO more?** Only the second has
-   ever paid. Panels, raised guards, and region splitting each made
-   structure visible and solved ~nothing.
+8. **How objects are GROUPED pays; what is visible AROUND them does not.**
+   Regrouping the same pixels into different objects has earned 14 tasks
+   (`no_background` 9, `connected8` 3, `by_color` 2). Making extra
+   structure visible without changing the grouping has earned ~1 (panels
+   1, region splitting 0, raised guards 1) at heavy runtime cost. An
+   earlier version of this rule said "seeing more never pays" -- that was
+   wrong, and `no_background` disproved it by adding 8 tasks in one run.
 
 ## Why evaluation is 0, precisely
 

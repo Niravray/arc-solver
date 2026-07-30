@@ -17,7 +17,11 @@ import time
 import numpy as np
 from scipy import ndimage
 
-from object_extractor import extract_objects, get_background_color
+from object_extractor import (
+    extract_by_color,
+    extract_objects,
+    get_background_color,
+)
 from property_encoder import encode_all_objects
 from relationship_graph import build_relationship_graph
 
@@ -803,9 +807,11 @@ class MoveProgram:
 # ============================================================
 
 SCENE_INTERPRETATIONS = [
-    ("connected4", {"connectivity": 4}),
-    ("connected8", {"connectivity": 8}),
-    ("panels",     {"panels": True}),
+    ("connected4",    {"connectivity": 4}),
+    ("connected8",    {"connectivity": 8}),
+    ("by_color",      {"by_color": True}),
+    ("no_background", {"connectivity": 4, "include_background": True}),
+    ("panels",        {"panels": True}),
 ]
 
 _ACTIVE_INTERPRETATION = {"connectivity": 4}
@@ -960,10 +966,17 @@ def scene_objects(grid, background):
     rule was induced, and a rule induced under one reading of "object"
     is applied under that same reading.
     """
-    if _ACTIVE_INTERPRETATION.get("panels"):
+    params = dict(_ACTIVE_INTERPRETATION)
+    if params.pop("panels", False):
         raw = extract_panels(grid, background)
+    elif params.pop("by_color", False):
+        # Every pixel of a colour is ONE object regardless of adjacency --
+        # the right reading when a task treats colour as identity rather
+        # than shape. Built and tested on June 16 and never used by the
+        # synthesis engine until now.
+        raw = extract_by_color(grid, background)
     else:
-        raw = extract_objects(grid, background, **_ACTIVE_INTERPRETATION)
+        raw = extract_objects(grid, background, **params)
     if not raw:
         return []
     objs = encode_all_objects(raw, grid.shape)
@@ -2145,6 +2158,18 @@ COMPOSED_OPERATORS = [
     if first.name != second.name
 ]
 
+# Three stages, by using a two-stage composition as the second stage.
+# 37% of evaluation tasks need three or more distinct change concepts
+# against 23% on training, and two stages structurally cannot reach them.
+# Kept to Remove-first chains: Remove is the cheapest first stage (no
+# value hole) and the measured multi-concept buckets are dominated by
+# combinations that include a removal.
+_THREE_STAGE = [
+    ComposedOperator(REMOVE_FIRST, ComposedOperator(MOVE_FIRST, RECOLOR)),
+    ComposedOperator(REMOVE_FIRST, ComposedOperator(RECOLOR_FIRST, DRAW)),
+]
+COMPOSED_OPERATORS = COMPOSED_OPERATORS + _THREE_STAGE
+
 # Single operators are tried first: when both can explain a task, the
 # simpler rule is the one more likely to be the real one.
 OPERATORS = [RECOLOR, REMOVE, MOVE, DRAW, EXTRACT] + COMPOSED_OPERATORS
@@ -2528,6 +2553,17 @@ def _interpretation_applies(name, task):
         four = len(extract_objects(grid, background, connectivity=4))
         eight = len(extract_objects(grid, background, connectivity=8))
         return four != eight
+
+    if name == "by_color":
+        # Pointless unless some colour is split across several components,
+        # since otherwise colour-grouping reproduces the default reading.
+        four = len(extract_objects(grid, background, connectivity=4))
+        return len(extract_by_color(grid, background)) != four
+
+    if name == "no_background":
+        # Only meaningful when the background actually forms regions worth
+        # treating as objects, i.e. it is present at all.
+        return bool((grid == background).any())
 
     return True
 
