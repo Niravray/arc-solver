@@ -17,7 +17,12 @@ import os
 import collections
 
 
-from task_loader import load_all_tasks, get_task_ids, load_solutions
+from task_loader import (
+    get_dev_holdout_split,
+    get_task_ids,
+    load_all_tasks,
+    load_solutions,
+)
 from object_extractor import extract_objects, get_background_color
 from property_encoder import encode_all_objects
 from relationship_graph import build_relationship_graph
@@ -701,12 +706,24 @@ def run_dual_evaluation(limit=None):
     one.
     """
     stats_by_split = {}
-    for split in ("training", "evaluation"):
-        print(f"Evaluating {split} split...")
-        records, duration = evaluate_split(split, limit=limit)
-        stats_by_split[split] = _split_statistics(records)
-        if split == "training":
-            save_evaluation_results(records)
+
+    print("Evaluating training split...")
+    training_records, _ = evaluate_split("training", limit=limit)
+    save_evaluation_results(training_records)
+
+    # Partition the SAME records rather than running training twice --
+    # the split is a reporting boundary, not a different computation.
+    dev_ids, holdout_ids = get_dev_holdout_split("training")
+    dev_set, holdout_set = set(dev_ids), set(holdout_ids)
+    stats_by_split["training-dev"] = _split_statistics(
+        [r for r in training_records if r["task_id"] in dev_set])
+    stats_by_split["training-holdout"] = _split_statistics(
+        [r for r in training_records if r["task_id"] in holdout_set])
+    stats_by_split["training-all"] = _split_statistics(training_records)
+
+    print("Evaluating evaluation split...")
+    evaluation_records, _ = evaluate_split("evaluation", limit=limit)
+    stats_by_split["evaluation"] = _split_statistics(evaluation_records)
 
     print_technical_report(stats_by_split)
     return stats_by_split

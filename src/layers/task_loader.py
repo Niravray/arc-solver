@@ -211,3 +211,49 @@ if __name__ == "__main__":
     print(f"\nOutput grid:\n{pair['output']}")
 
     print("\nTask loader is working correctly.")
+
+# ============================================================
+# DEV / HOLDOUT SPLIT
+#
+# Every form, atom, cost heuristic and threshold in this solver was
+# chosen by looking at training results, and scored on those same 1000
+# tasks. That makes the training number optimistic even as a measure of
+# "generalises to unseen tasks of this difficulty" -- the designer has
+# seen every task, so the solver is fitted to them whether or not any
+# single rule is.
+#
+# The fix is a split within training: tune on DEV, and keep HOLDOUT as a
+# clean estimate. Deterministic (sorted ids, fixed seed) so the same
+# tasks land in the same side on every machine and every run -- a split
+# that drifts is worse than none, because a gain could just be a
+# reshuffle.
+#
+# IMPORTANT: this split was created on 2026-07-30, AFTER the solver had
+# already been tuned against all 1000 tasks. The first holdout number is
+# therefore already contaminated and is NOT a clean estimate of anything.
+# It becomes meaningful only for decisions taken from here on.
+# ============================================================
+
+HOLDOUT_FRACTION = 0.25
+SPLIT_SEED = 20260730
+
+
+def get_dev_holdout_split(split="training",
+                          holdout_fraction=HOLDOUT_FRACTION,
+                          seed=SPLIT_SEED):
+    """
+    Partition a split's task ids into (dev, holdout), deterministically.
+
+    Sorting before shuffling matters: dict iteration order would make the
+    partition depend on the JSON's key order rather than on the seed.
+    """
+    import random
+
+    ids = sorted(get_task_ids(split))
+    shuffled = list(ids)
+    random.Random(seed).shuffle(shuffled)
+
+    cut = int(len(shuffled) * holdout_fraction)
+    holdout = sorted(shuffled[:cut])
+    dev = sorted(shuffled[cut:])
+    return dev, holdout

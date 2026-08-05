@@ -346,3 +346,30 @@ class DisabledCapabilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DevHoldoutSplitTests(unittest.TestCase):
+    """
+    The split must be stable. A partition that drifts between runs is
+    worse than none, because a gain could just be a reshuffle.
+    """
+
+    def test_split_is_deterministic_disjoint_and_total(self):
+        from task_loader import get_dev_holdout_split
+
+        dev_a, hold_a = get_dev_holdout_split("training")
+        dev_b, hold_b = get_dev_holdout_split("training")
+
+        self.assertEqual(dev_a, dev_b)
+        self.assertEqual(hold_a, hold_b)
+        self.assertEqual(set(dev_a) & set(hold_a), set())
+        self.assertEqual(len(dev_a) + len(hold_a), 1000)
+        self.assertEqual(len(hold_a), 250)
+
+    def test_split_does_not_depend_on_json_key_order(self):
+        # Ids are sorted before shuffling, so the partition follows the
+        # seed rather than however the dataset file happens to be ordered.
+        from task_loader import get_dev_holdout_split
+
+        _dev, hold = get_dev_holdout_split("training")
+        self.assertEqual(hold, sorted(hold))
