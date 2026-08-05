@@ -157,8 +157,50 @@ must lose to a structural one (`has_2_red_neighbours`), exactly as
 form-failures. For each, label changed vs unchanged cells and ask whether
 *any* predicate over a fixed neighbourhood catalog separates them on
 every training pair. **If fewer than ~5 of 32 admit a separating cell
-predicate, the abstraction is wrong and should not be built.** This is a
-pure measurement, no implementation.
+predicate, the abstraction is wrong and should not be built.**
+
+### RESULT: FALSIFIED (2026-07-30). Do not build this.
+
+```
+target tasks              32
+separable by a cell rule   0     (pre-registered threshold: 5)
+```
+
+**Zero of 32.** Run before any implementation, against a threshold fixed
+in advance.
+
+**The instrument was validated first.** On seven training tasks we
+already solve with a known cell-level rule, the same catalog separated
+**4 of 7** — and it recovered exactly the predicates this proposal
+claimed the Draw forms secretly are:
+
+```
+4258a5f9  SEPARABLE  adj8_colour5==True                 (was: halo8)
+dc1df850  SEPARABLE  adj8_colour2==True                 (was: halo8)
+3aa6fb7a  SEPARABLE  is_background AND in_object_bbox   (was: bbox_fill)
+6d75e8bb  SEPARABLE  is_background AND in_object_bbox   (was: bbox_fill)
+```
+
+So the *"hand-written forms are really uninduced cell predicates"* claim
+was correct — and still did not matter, because the evaluation tasks are
+not decided by cell context at all.
+
+The three control misses are the informative part. `00d62c1b` and
+`a5313dff` need "not reachable from the grid border", which **no 3×3
+neighbourhood can express**: enclosure is a connectivity property, and
+connectivity is global.
+
+**Conclusion, and it generalises past this extension:** the problem was
+never that we describe the wrong *unit*. Cells are not a better unit than
+objects here — both are LOCAL descriptions. Whether a cell or an object
+changes in these tasks is decided by NON-LOCAL, relational structure:
+which object it belongs to, whether that object is the largest, whether
+it is enclosed, how it corresponds to something else in the scene.
+
+This retires the whole cellular-automata / local-rule family for these
+tasks, and it shifts weight toward descriptors that are inherently global
+(Extension B) and toward cross-object correspondence — which is exactly
+what the unwired `graph_difference.py` computes.
 
 ---
 
