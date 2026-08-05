@@ -378,3 +378,60 @@ existing representation*. The measurements say the representation is the
 constraint — failures happen at observation and at form, before search
 begins. Extensions A and B add **new things to say**; C keeps the language
 honest while they are added.
+
+
+---
+
+## Part 6 — Extension B, retested properly
+
+The retracted test measured whole-grid regularity. The corrected one
+**segments first, then measures inside each region**: peel uniform border
+rings, split on uniform lines, then look for per-row and per-column
+periodicity with a bounded number of defects. All computed, no search.
+
+**The control was designed to be able to fail.** The previous control
+contained only globally-symmetric tasks — exactly what the broken
+instrument could already see — so it passed 3/3 while the instrument was
+useless. This one includes `135a2760`, the framed regional case verified
+by hand, as a known-positive the detector *must* find.
+
+```
+CONTROL  135a2760 (regional, framed, known-positive):  DETECTED
+QUALIFYING:  1 / 120        (pre-registered threshold: 6)
+VERDICT:     FALSIFIED, on a validated instrument
+```
+
+Regional periodicity is real, and it is worth **one** evaluation task.
+
+---
+
+## Part 7 — What three falsifications add up to
+
+| extension | instrument validated? | evaluation yield |
+|---|---|---|
+| A — cell-neighbourhood predicates | yes (4/7 control) | **0 / 32** |
+| B v1 — whole-grid regularity | **no** — retracted | (void) |
+| B v2 — regional regularity | yes (hard control detected) | **1 / 120** |
+
+Two extensions, properly tested, worth a combined **one task**.
+
+**The meta-finding is the useful part.** Reading the tasks directly
+showed `135a2760` is periodic repair, `28a6681f` is staircase
+regularisation, `dd6b8c4b` is noise removal inside framed regions — three
+tasks, three unrelated concepts. That is ARC-AGI-2's evaluation set
+working as designed: it is *constructed* so that no single concept covers
+many tasks.
+
+**So the strategy of "find the high-leverage vocabulary extension" may
+have no winner.** Every candidate tested lands at 0–1 tasks, and the
+reason is structural rather than a failure of imagination: the benchmark
+is built to defeat exactly that strategy. A vocabulary that covers 6+
+evaluation tasks would have to be *general* in a way none of these
+geometric descriptors are.
+
+**Methodological lesson, worth more than the extensions:** a control must
+include a case the instrument is expected to find HARD. The B v1 control
+passed 3/3 and certified a broken detector, because every control case
+was one the detector was built for. Cheap thresholds fixed in advance
+caught two bad ideas; only a properly adversarial control caught the bad
+*instrument*.
