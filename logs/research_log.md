@@ -466,3 +466,34 @@ evaluation      120       0      0.00%       0
 - interpretations now searched: `connected4`, `connected8`, `by_color`, `no_background`, `panels` — **the second-largest source of solves in the project**
 - tests 46/46; submission pipeline verified; code portable to Kaggle
 - Next: see `docs/RESEARCH_AGENDA.md`. The cheapest high-value item is a held-out split *within* training — all 1000 tasks are currently used both to design and to score, so 7.20% is optimistic even for unseen tasks of the same difficulty
+
+### Later — the held-out split
+
+Implemented the top item from `docs/RESEARCH_AGENDA.md`: a **750 dev / 250 holdout** split within training, deterministic (ids sorted, then shuffled with a fixed seed) so the partition cannot drift between runs or machines. `--full-eval` now reports `training-dev`, `training-holdout`, `training-all` and `evaluation`.
+
+```
+training-dev       750 tasks   60 solved   8.00%   precision  91%
+training-holdout   250 tasks   12 solved   4.80%   precision 100%
+training-all      1000 tasks   72 solved   7.20%   precision  92%
+```
+
+**The 3.2-point gap is NOT significant.** If the true rate were 7.2% everywhere, a 250-task holdout gives 18 ± 4.1 solves; 12 observed is z = −1.47, p = 0.14, Fisher exact on dev vs holdout p = 0.12. Reporting that gap as evidence of overfitting would have been wrong, and it was tempting — it points exactly the way the hypothesis predicted.
+
+**The resolution finding matters more than the number.** At a ~7% solve rate, one standard deviation on a 250-task holdout is ~4 solves, so **a change must be worth roughly 8+ tasks on holdout to clear noise.** Almost every win in this project has been 1–8 tasks *across all 1000*. So the holdout as sized is a guard against large fitting effects, not a measure of incremental progress — and treating it as the latter would produce confident nonsense in both directions. Making it able to adjudicate a typical change means enlarging it, which costs dev signal; that tradeoff is unresolved.
+
+Two caveats written into the code rather than left in a commit message:
+1. The split was created **after** the solver was already tuned against all 1000 tasks, so this first holdout number is itself contaminated. It only starts meaning something for decisions taken from here on.
+2. The resolution limit above.
+
+**Process note:** the first attempt re-ran the full evaluation and was still going after 70 minutes (machine throttling again, ~7s/task against 0.9s clean). Killed it once I realised the split is a **partition of records, not a computation** — the previous run's results were already saved, so the answer came from `logs/full_evaluation_results.json` in seconds. Worth remembering before spending an hour on a reporting change.
+
+### Where this leaves the project
+
+```
+training       1000 tasks    72 solved   7.20%
+evaluation      120 tasks     0 solved   0.00%
+```
+
+48 tests. Submission pipeline verified end to end. Code portable to Kaggle. Everything committed and pushed.
+
+`CLAUDE.md` carries the working context for a fresh session; `docs/RESEARCH_AGENDA.md` carries 24 flaws across six tiers with research directions for each. The cheapest remaining high-value items are parallelism (1000 independent tasks currently run serially on one core, blocked by module-level mutable state) and, on the research side, template/motif matching — 90% of evaluation tasks contain repeated shapes and the solver has no concept of one.
