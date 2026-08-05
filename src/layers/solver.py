@@ -33,6 +33,10 @@ from verifier import (
 )
 from synthesis import synthesize_program
 
+# Worker processes for evaluation. 1 forces the serial path, which is
+# what the old behaviour was and what a debugger wants.
+PARALLEL_WORKERS = max(1, (os.cpu_count() or 2) - 1)
+
 # ============================================================
 # BEAM SEARCH + MAIN SOLVER
 # Layer 8 of the ARC Solver Pipeline
@@ -436,6 +440,109 @@ def _diagnose_failure(task, method):
     return len(hypotheses), reason
 
 
+def _evaluate_one(payload):
+    """
+    Solve and score ONE task. Module-level and picklable so it can run in
+    a worker process.
+
+    Deliberately process-based rather than thread-based. synthesis.py
+    keeps the active scene interpretation in a module-level global, and
+    leaves the winning one set so a rule is applied to the test grid
+    under the same reading it was induced under. Threads would share and
+    corrupt that; separate processes each get their own copy, so the
+    globals are safe untouched and no refactor is needed to parallelise.
+    """
+    import time
+    import traceback
+
+    task_id, task, correct_outputs = payload
+    started = time.perf_counter()
+
+    record = {
+        "task_id":          task_id,
+        "correct":          False,
+        "method":           None,
+        "matched_attempt":  None,
+        "duration_seconds": None,
+        "error":            None,
+        "hypotheses_tried": None,
+        "failure_reason":   None,
+        "predicted_output": None,
+        "expected_output":  None,
+    }
+
+    try:
+        predictions, method = solve_task(task)
+        record["duration_seconds"] = time.perf_counter() - started
+        record["method"] = method
+
+        is_correct = False
+        if correct_outputs:
+            for slot, pred in enumerate(predictions, start=1):
+                for correct_out in correct_outputs:
+                    if np.array_equal(pred, correct_out):
+                        is_correct = True
+                        record["matched_attempt"] = slot
+                        break
+                if is_correct:
+                    break
+        record["correct"] = is_correct
+
+        if not is_correct:
+            try:
+                n_hyps, reason = _diagnose_failure(task, method)
+                record["hypotheses_tried"] = n_hyps
+                record["failure_reason"] = reason
+            except Exception:
+                record["failure_reason"] = (
+                    "Could not compute failure diagnostics: "
+                    + traceback.format_exc())
+            record["predicted_output"] = (
+                predictions[0].tolist() if predictions else None)
+            record["expected_output"] = (
+                correct_outputs[0].tolist() if correct_outputs else None)
+
+    except Exception:
+        record["duration_seconds"] = time.perf_counter() - started
+        record["error"] = traceback.format_exc()
+
+    return record
+
+
+def run_full_evaluation_parallel(tasks, task_ids, solutions, workers=None,
+                                 progress_every=100):
+    """
+    Same per-task work as run_full_evaluation, spread over processes.
+
+    Tasks are completely independent -- nothing is shared or accumulated
+    between them -- so this is embarrassingly parallel and the only real
+    cost is pickling each task's grids to the worker.
+
+    Results are collected in submission order via imap, so the output
+    list matches task_ids exactly as the serial path produced it.
+    """
+    import multiprocessing as mp
+    import time
+
+    if workers is None:
+        workers = max(1, (os.cpu_count() or 2) - 1)
+
+    payloads = [(tid, tasks[tid], solutions.get(tid)) for tid in task_ids]
+    started = time.perf_counter()
+    results = []
+
+    with mp.Pool(processes=workers) as pool:
+        for i, record in enumerate(pool.imap(_evaluate_one, payloads,
+                                             chunksize=4), start=1):
+            results.append(record)
+            if progress_every and i % progress_every == 0:
+                solved = sum(1 for r in results if r["correct"])
+                print(f"  {i}/{len(payloads)}  solved {solved}  "
+                      f"({time.perf_counter() - started:.0f}s)")
+
+    return results, time.perf_counter() - started
+
+
 def run_full_evaluation(tasks, task_ids, solutions, progress_every=50):
     """
     Evaluation-only pass over every task in task_ids. Solves each one via
@@ -603,9 +710,13 @@ def evaluate_split(split, limit=None, verbose=False):
     if limit:
         task_ids = task_ids[:limit]
 
-    return run_full_evaluation(
-        tasks, task_ids, solutions,
-        progress_every=(50 if verbose else 10 ** 9),
+    if PARALLEL_WORKERS == 1:
+        return run_full_evaluation(
+            tasks, task_ids, solutions,
+            progress_every=(50 if verbose else 10 ** 9),
+        )
+    return run_full_evaluation_parallel(
+        tasks, task_ids, solutions, workers=PARALLEL_WORKERS,
     )
 
 

@@ -196,6 +196,49 @@ abstractions from solved tasks and add them to the DSL; this is the single
 biggest architectural difference between this solver and the strongest
 published program-synthesis approaches.
 
+**MEASURED 2026-07-30 — NOT YET VIABLE. Do not build this next.**
+
+The corpus was probed for recurring structure. Counting matters at three
+levels and only the third is an abstraction:
+
+| level | most common | count |
+|---|---|---|
+| atoms (already named) | `all` | 24 |
+| whole selectors | `all` | 24 |
+| **single-operator skeletons** | `Extract(?, bbox_crop)` | 13 |
+| **COMPOSED skeletons** | `Recolor(?, literal) THEN Draw(?, halo8)` | **2** |
+
+The 13 is a trap and the probe's own auto-verdict fell for it:
+`Extract(?, bbox_crop)` recurring 13 times does **not** mean there is an
+abstraction to extract — `Extract` *is already a primitive*. Promoting it
+to a named primitive gains nothing. All that number says is "this
+operator gets used."
+
+Library learning pays only when a **combination** recurs often enough to
+deserve its own name. The best composed motif appears **twice**, and 8
+skeletons appear exactly once. An abstraction seen twice is as likely to
+be coincidence as concept, so there is nothing to compress.
+
+**When to revisit:** at 72 solves, composed motifs recur ~2×. For one to
+recur 5-6× would plausibly need 250-350 solves, i.e. ~25-35% training
+accuracy. That is the chicken-and-egg — library learning makes a good
+solver better, it does not make a weak one good. Re-run the probe
+(`scratchpad/probe_library.py` pattern: decompose solved programs,
+count skeletons with holes blanked) whenever the solve count roughly
+triples, and build only if a composed motif clears ~5.
+
+### 15b. `induce_selectors` does nothing in most successful solves
+
+**[measured]** Found while probing for the above: **`all` is the selector
+in 24 of ~40 induced programs.** More than half of what the engine solves
+applies to *every* object with no selection at all.
+
+That is worth knowing before investing further in selector machinery,
+which has been treated as the shared core of the engine. It also explains
+why adding predicates has never paid **[measured]** (relational atoms 0,
+10 candidate atoms 0, depth-3 conjunctions 0): in the majority of solves
+there is no selection problem to improve.
+
 ### 16. No learned search guidance
 
 Search order comes from hand-written cost functions. Nothing learns which
@@ -279,8 +322,8 @@ clean, idle re-run before it is believed.
 1. **#17** (held-out split) — makes every subsequent number honest
 2. **#21/#22** (parallelism) — 6× faster iteration compounds into everything
 3. **#3** (template matching) — largest measured structural signal in eval
-4. **#15** (library learning) — the biggest architectural gap versus
-   published work
+4. ~~**#15** (library learning)~~ — **measured as not yet viable**, see
+   above; revisit when the solve count roughly triples
 5. **#1** (two-level rules) — the clearest expressiveness gap
 
 ## Suggested order if optimising for score on training
