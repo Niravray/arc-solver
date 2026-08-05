@@ -242,6 +242,61 @@ holds in the output but not the input, or (b) the output is the input's
 period-completion. **If under ~8 tasks qualify, the yield does not justify
 the machinery.**
 
+### RESULT: FALSIFIED (2026-07-30). Do not build this either.
+
+```
+output gains a symmetry the input lacks (every pair)  :  1
+changed cells ARE the symmetry violations             :  0
+output is the input's period-completion               :  0
+QUALIFYING                                            :  0 / 120
+```
+
+Threshold was 8, fixed before running. **Zero.**
+
+**Control passed 3/3** on training tasks solved by mirror forms —
+`496994bd` (gains mirror_ud and rot180), `f25ffba3` (mirror_ud),
+`e729b7be` (rot180), all with the changed cells matching the symmetry
+violations exactly. The detector works; evaluation simply has none of
+this.
+
+---
+
+## Part 5 — The pattern across both falsifications
+
+Three times now, a representational device has been validated on
+training tasks and produced **zero** on evaluation:
+
+| device | training control | evaluation |
+|---|---|---|
+| cell-neighbourhood predicates | 4 / 7 | **0 / 32** |
+| symmetry & period completion | 3 / 3 | **0 / 120** |
+| the object operators themselves | 72 solves | **0 / 120** |
+
+Every instrument works where it was designed and finds nothing where it
+was not. That is a stronger and more uncomfortable signal than either
+individual result.
+
+**The hidden assumption both extensions shared:** that the
+transformation is a function of the input grid's *geometry* — local
+neighbourhood in A, global symmetry in B — so that computing the right
+geometric property would reveal which cells or objects change. Evaluation
+tasks appear not to work that way.
+
+**What has never been tested:** whether the deciding structure is
+*correspondence* — this thing relates to that thing — rather than any
+property computable from one grid alone. `src/layers/graph_difference.py`
+computes exactly that and has been built, tested and unwired for five
+days.
+
+**Methodological note.** Both extensions were hypotheses generated from
+intuitions formed on training tasks, then tested against evaluation. Both
+failed the same way. Before proposing a third, the honest step is to stop
+generating candidates from training intuition and read a sample of
+evaluation tasks directly — describing what each actually requires, with
+no hypothesis in hand. Structural taxonomy has been done; semantic
+reading has not.
+
+
 ---
 
 ### Extension C — DESCRIPTION LENGTH as the single ranking principle
