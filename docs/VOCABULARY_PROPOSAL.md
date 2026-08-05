@@ -435,3 +435,102 @@ passed 3/3 and certified a broken detector, because every control case
 was one the detector was built for. Cheap thresholds fixed in advance
 caught two bad ideas; only a properly adversarial control caught the bad
 *instrument*.
+
+---
+
+## Part 8 — Extension D: correspondence, tested
+
+Part 5 named the question no one had tested: is the deciding structure
+*correspondence* — this object relates to that one — rather than any
+property computable from a single grid? `src/layers/graph_difference.py`
+has sat built and unwired on exactly this bet for five days. This is that
+test: `scripts/falsify_correspondence.py`.
+
+**What was measured.** For every evaluation task, label each input object
+CHANGED or UNCHANGED. Ask whether a depth ≤2 conjunction — the solver's
+real `MAX_CONJUNCTION` — separates the two sets on every training pair
+simultaneously, under any of the solver's five scene interpretations.
+Two atom pools: the solver's existing catalog (BASELINE), and eight new
+relational atoms computed pairwise against every other object in the same
+scene — exact shape twin, twin up to rotation/reflection (dihedral,
+excluding the exact match), scaled-integer copy, bounding-box containment
+in either direction, and majority-shape membership. The decision-relevant
+count is **CORR-ONLY**: tasks a correspondence atom separates that no
+baseline atom does — coincidence with what the solver can already say
+doesn't count as new capability.
+
+**Pre-registered before the evaluation set was touched:** CORR-ONLY ≥ 8 ⇒
+survives (same order of magnitude as A's and B's thresholds, discounted
+for the 3–10× attrition every "observable" count in this project has
+shown between separability and an actual solve).
+
+**The positive control took two tries, and the first miss is the useful
+part.** The original choice, training task `776ffc46`, was picked from a
+30-second read: a framed template holds a shape, loose shapes matching it
+get recoloured. Reading it fully to build the control disproved that read
+— the true rule needs choosing *which of two frames is bigger*, reading
+*its* content, and matching loose shapes against *that* — a three-step
+derive-then-use chain, not a single correspondence relation. Using it
+would have blamed a miss on correspondence when the actual gap is the
+"two-level rules" line already in `CLAUDE.md`. Replaced with `7d1f7ee8`,
+hand-verified against all 3 training pairs: two framed objects have their
+nested content simplified, a third same-general-shape object outside any
+frame is a decoy and is left alone. No baseline atom separates this task
+at all; `corr:is_contained` alone does, exactly.
+
+**The negative control also came from reading the task, not from what the
+detector could already pass.** `810b9b61` recolours objects that enclose a
+background hole (`has_holes` — a single-object property) and, under one
+scene interpretation, `corr:contains_object` happens to be active and
+correlated. The instrument correctly stays silent on CORR-ONLY because a
+baseline separator (`has_holes`) is also found — coincidence, not
+capability.
+
+```
+CONTROL 1 (positive, 7d1f7ee8)   DETECTED   corr:is_contained
+CONTROL 2 (negative, 810b9b61)   SILENT     baseline (has_holes) also separates
+```
+
+**Evaluation result:**
+
+```
+applicable                                    79 / 120
+baseline-separable                            51
+corr-separable (weak form)                    28
+CORR-ONLY (decision form)                      1     3dc255db, corr:is_contained
+permutation control, chance CORR-ONLY        0.2     (5 shuffles: 0,1,0,0,0)
+```
+
+### RESULT: FALSIFIED in the decision form. Threshold was 8; result is 1.
+
+The weak form (CORR-SEPARABLE, 28) numerically clears the same threshold,
+but **the permutation control removes it as evidence.** Shuffling the
+CHANGED/UNCHANGED labels while keeping the correspondence atoms active
+produced CORR-ONLY = 1 on one of five shuffles — identical to the real
+count. The single real hit cannot be distinguished from noise. And
+CORR-SEPARABLE was never the decision criterion (stated in the
+pre-registration before this run): a correspondence atom coinciding with
+what 51 baseline-separable tasks can already say is not new capability,
+it's the `shape_is_unique` situation from Extension A's own instrument
+repeating itself — a real relation, doing no marginal work.
+
+**This is the same shape as A and B, a third time, with a fully-tested
+instrument this time — both controls came from reading tasks by hand, and
+the first attempt at the positive control was wrong and was caught before
+the evaluation set was touched, not after.**
+
+| device | training control | evaluation yield |
+|---|---|---|
+| cell-neighbourhood predicates (A) | 4 / 7 | **0 / 32** |
+| symmetry & period completion (B v2) | hard case detected | **1 / 120** |
+| cross-object correspondence (D) | hard case detected | **1 / 120 (indistinguishable from chance)** |
+
+**What this closes.** `graph_difference.py`'s docstring calls a
+correspondence score "the natural input to the two-level rules the solver
+actually lacks." That description survives — `776ffc46` is direct
+evidence a two-level chain is what some evaluation tasks need — but this
+result says correspondence AS A SELECTOR, on its own, is not where the
+missing value is. The gap Part 5 pointed at was real; it just doesn't
+cash out as "add relational atoms to selector induction." It cashes out
+as the derive-then-use chain itself, which no extension proposed here —
+A, B, C, or D — attempts to build.
