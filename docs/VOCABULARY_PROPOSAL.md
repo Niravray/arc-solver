@@ -242,7 +242,32 @@ holds in the output but not the input, or (b) the output is the input's
 period-completion. **If under ~8 tasks qualify, the yield does not justify
 the machinery.**
 
-### RESULT: FALSIFIED (2026-07-30). Do not build this either.
+### RESULT: **RETRACTED — the test was wrong, not the extension.**
+
+The original run reported 0/120 qualifying against a threshold of 8, and
+this document said "FALSIFIED". **That verdict is withdrawn.** The
+detector measured WHOLE-GRID periodicity and WHOLE-GRID symmetry. Reading
+task `135a2760` by hand shows the regularity is *regional*:
+
+```
+3333333333333   <- outer frame, colour 3
+3222222222223   <- inner frame, colour 2
+3213131333123   <- periodic interior, ONE defect
+3222222222223
+3333333333333
+```
+
+Interior `[1,3,1,3,1,3,3,3,1]` under period 2 has canon `{0:1, 1:3}` and
+exactly one defect — at the precise cell the output changes. The whole-row
+and whole-grid tests both fail here because the *frame cells* break any
+regularity measured across the full extent.
+
+The control passed 3/3 only because those three training tasks happen to
+be **globally** symmetric, which is exactly the case the instrument could
+see. A control that only covers the easy case cannot validate an
+instrument against the hard one.
+
+### RESULT (superseded heading kept for history)
 
 ```
 output gains a symmetry the input lacks (every pair)  :  1
