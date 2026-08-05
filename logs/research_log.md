@@ -497,3 +497,38 @@ evaluation      120 tasks     0 solved   0.00%
 48 tests. Submission pipeline verified end to end. Code portable to Kaggle. Everything committed and pushed.
 
 `CLAUDE.md` carries the working context for a fresh session; `docs/RESEARCH_AGENDA.md` carries 24 flaws across six tiers with research directions for each. The cheapest remaining high-value items are parallelism (1000 independent tasks currently run serially on one core, blocked by module-level mutable state) and, on the research side, template/motif matching — 90% of evaluation tasks contain repeated shapes and the solver has no concept of one.
+
+## Session — August 5, 2026
+
+### What we did
+
+Tested the one hypothesis `docs/VOCABULARY_PROPOSAL.md` Part 5 had explicitly flagged as never tested: whether the objects that change are decided by **correspondence** — shape twin, twin-up-to-rotation, containment, scaled copy — rather than by any property computable from a single object alone. This is exactly what `graph_difference.py` computes and has sat unwired since it was built.
+
+Wrote `scripts/falsify_correspondence.py` as a proper falsification test, pre-registered before the evaluation set was touched: **CORR-ONLY** (a task a correspondence atom separates that no baseline atom also separates, at conjunction depth ≤2 — the solver's real `MAX_CONJUNCTION`) ≥ 8 of 120 to survive.
+
+**Result: 1 of 120, and that one hit is not distinguishable from chance.** A permutation control — shuffle the changed/unchanged labels five times, keep the correspondence atoms active — produced CORR-ONLY = 1 on one of five shuffles, identical to the real count. The weak form (28/120 tasks where a correspondence atom separates at all, regardless of whether baseline also can) numerically clears the same threshold, but was never the decision criterion: most of it coincides with what 51 baseline-separable tasks already explain.
+
+**Both controls came from reading tasks by hand, not from what the instrument happened to pass — and the positive control took two tries.** The first candidate, training task `776ffc46`, read on a 30-second glance like a clean correspondence case: loose shapes matching a template's shape get recoloured. Reading it fully to build the control disproved that: the real rule needs picking which of two frames is LARGER, reading THAT frame's content, then matching loose shapes against it — a three-step derive-then-use chain, not a single relation. Caught before the evaluation set was touched, not after. Replaced with `7d1f7ee8`: two framed objects have their nested content simplified, a same-general-shape decoy outside any frame does not change. Hand-verified against all 3 training pairs; no baseline atom separates this task at all, `corr:is_contained` alone does. The negative control, `810b9b61`, has a correspondence atom that is genuinely active and correlated, and the instrument correctly stayed silent because a real baseline separator (`has_holes`) also explains it.
+
+Recorded as Extension D in a new Part 8 of `docs/VOCABULARY_PROPOSAL.md`.
+
+### Key insight
+
+Three vocabulary extensions have now been tested this way, each on a properly validated instrument, and the pattern is no longer a coincidence:
+
+| device | training control | evaluation yield |
+|---|---|---|
+| cell-neighbourhood predicates (A) | 4 / 7 | 0 / 32 |
+| symmetry & period completion (B v2) | hard case detected | 1 / 120 |
+| cross-object correspondence (D) | hard case detected | 1 / 120, at chance |
+
+`graph_difference.py`'s docstring calls a correspondence score "the natural input to the two-level rules the solver actually lacks" — and the discarded `776ffc46` control is direct evidence that gap is real. But this result says correspondence AS A SELECTOR, on its own, is not where the missing value is. What would move the needle is the derive-then-use chain itself — read something, then act on what was read — which none of A, B, C, or D attempt to build, and which is a materially bigger thing to construct than any atom catalog.
+
+### Where this leaves the project
+
+```
+training       1000 tasks    72 solved   7.20%
+evaluation      120 tasks     0 solved   0.00%
+```
+
+No solver code changed this session — pure measurement. `scripts/falsify_correspondence.py` is reusable for any future correspondence-shaped hypothesis. Four vocabulary extensions proposed, three tested, each surviving its own control and each landing at 0–1 evaluation tasks. The honest reading of `docs/VOCABULARY_PROPOSAL.md` Part 7 is looking more right with every extension added to it: no single-concept vocabulary addition is going to move evaluation off zero, because the benchmark is built to defeat exactly that strategy.
