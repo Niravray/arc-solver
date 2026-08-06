@@ -12,9 +12,17 @@ training       1000      72      7.20%
 evaluation      120       0      0.00%
 ```
 
-Induction precision 92% (63 rules offered, 58 correct). 46 tests passing.
+Induction precision 92% (63 rules offered, 58 correct). 48 tests passing.
 A clean full run is ~900s training + ~150s eval, though timings on
-this machine swing wildly (see rule 7).
+this machine swing wildly (see rule 7) — a 2026-08-05 re-run hit 5673s /
+6026s with 0 errors and identical accuracy; see the log before trusting
+either number.
+
+`--full-eval` also reports a deterministic 750/250 dev/holdout split
+within training (`task_loader.get_dev_holdout_split`), so a change can be
+checked against holdout instead of the same 1000 tasks it was tuned on.
+Runs in parallel by default via `multiprocessing` — set `PARALLEL_WORKERS`
+in `solver.py` to 1 to force the old serial path.
 
 **The evaluation number is the one that counts** — Kaggle's test set comes
 from that distribution, not training's. Training is the iteration target

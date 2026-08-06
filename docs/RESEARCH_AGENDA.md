@@ -1,9 +1,10 @@
 # Flaws, bottlenecks and research directions
 
 Every item below is a real limitation of the solver as of 2026-07-30
-(72/1000 training, 0/120 evaluation). Measured claims are marked
-**[measured]**; the rest is analysis and should be treated as a hypothesis
-to test, not a fact.
+(72/1000 training, 0/120 evaluation), **except #17 and #21, resolved
+2026-07-30 and 2026-08-05 respectively and marked DONE in place below**.
+Measured claims are marked **[measured]**; the rest is analysis and
+should be treated as a hypothesis to test, not a fact.
 
 Ordered by how much a fix would plausibly matter, not by difficulty.
 
@@ -254,14 +255,18 @@ given #7 says search order is not what limits correctness).
 
 ### 17. There is no held-out split *within* training
 
-All 1000 training tasks are used both to design the solver and to score
-it. Every form, atom, cost heuristic and threshold was chosen by looking
-at those tasks. **So 7.20% is optimistic even as a measure of
-"generalises to unseen tasks of this difficulty."**
-
-**Fix:** split training into dev/holdout, tune only on dev, report both.
-This is the cheapest high-value methodological fix available and would
-make every future number trustworthy.
+**DONE 2026-07-30.** `task_loader.get_dev_holdout_split` partitions
+training into a deterministic 750/250 dev/holdout split (sorted ids,
+fixed seed, so the partition can't drift between runs or machines).
+`solver.py --full-eval` reports `training-dev`, `training-holdout` and
+`training-all` separately, alongside `evaluation`. See
+`logs/research_log.md`, "Later — the held-out split", for the first
+numbers and two open caveats: the split was created *after* the solver
+had already been tuned against all 1000 tasks (so that first holdout
+number was already contaminated), and at a ~7% solve rate one standard
+deviation on 250 tasks is ~4 solves, so a change needs to be worth
+roughly 8+ tasks to clear holdout noise. Both caveats still apply to
+every holdout number produced since.
 
 ### 18. Evaluation is no longer pristine
 
@@ -289,16 +294,27 @@ solvability*, before committing.
 
 ### 21. No parallelism
 
-**The single biggest cheap win.** 1000 tasks are completely independent
-and run serially on one core. A ~900s cycle could plausibly be ~150s.
-Blocked by #22.
+**DONE 2026-08-05, via a workaround rather than a fix for #22.**
+`run_full_evaluation_parallel` spreads the 1000 (or 120) independent
+tasks over a `multiprocessing.Pool` (`PARALLEL_WORKERS = cpu_count - 1`),
+collected via `imap` so output order still matches `task_ids`. This
+sidesteps #22 rather than resolving it: separate OS processes each get
+their own copy of the module globals, so the *thread*-safety problem
+never comes up. `evaluate_split` uses it automatically whenever
+`PARALLEL_WORKERS > 1`. Landed inside commit 236b5bf, whose message was
+about something else (the library-learning probe) — worth remembering
+next time a "what's already built" check is skipped because a commit
+message didn't advertise it.
 
 ### 22. Module-level mutable state
 
 `_ACTIVE_INTERPRETATION` and `_in_region_split` are globals, and
 `synthesize_program` deliberately *leaks* the winning interpretation so
-`apply` reads the grid the same way. Correct but fragile, and it makes the
-solver non-thread-safe, which blocks #21.
+`apply` reads the grid the same way. Correct but fragile. **No longer
+blocks #21** (multiprocessing sidesteps it — see above), so this is now
+a code-quality item rather than a performance blocker: still worth fixing
+because it makes in-process concurrency (threads, or importing the solver
+as a library alongside other stateful code) unsafe, just no longer urgent.
 
 **Fix:** thread the interpretation through explicitly, or bind it into the
 returned program object.
@@ -319,12 +335,16 @@ clean, idle re-run before it is believed.
 
 ## Suggested order if optimising for learning
 
-1. **#17** (held-out split) — makes every subsequent number honest
-2. **#21/#22** (parallelism) — 6× faster iteration compounds into everything
+1. ~~**#17** (held-out split)~~ — **done 2026-07-30**
+2. ~~**#21/#22** (parallelism)~~ — **#21 done 2026-08-05** via
+   multiprocessing; #22 itself remains open as a code-quality item, no
+   longer a blocker
 3. **#3** (template matching) — largest measured structural signal in eval
 4. ~~**#15** (library learning)~~ — **measured as not yet viable**, see
    above; revisit when the solve count roughly triples
 5. **#1** (two-level rules) — the clearest expressiveness gap
+
+Both cheap methodological items are now done. **#3 is next up.**
 
 ## Suggested order if optimising for score on training
 
