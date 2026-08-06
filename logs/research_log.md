@@ -532,3 +532,55 @@ evaluation      120 tasks     0 solved   0.00%
 ```
 
 No solver code changed this session — pure measurement. `scripts/falsify_correspondence.py` is reusable for any future correspondence-shaped hypothesis. Four vocabulary extensions proposed, three tested, each surviving its own control and each landing at 0–1 evaluation tasks. The honest reading of `docs/VOCABULARY_PROPOSAL.md` Part 7 is looking more right with every extension added to it: no single-concept vocabulary addition is going to move evaluation off zero, because the benchmark is built to defeat exactly that strategy.
+
+## Session — August 5, 2026 (continued)
+
+### What we did
+
+Went to start `docs/RESEARCH_AGENDA.md` item #17 (held-out split) as the next piece of work. It was already done — implemented and logged on July 30, and I said otherwise in conversation before checking. Reading `task_loader.py` and `solver.py` directly instead of trusting my own summary of the docs found:
+
+- **#17 (held-out split): done 2026-07-30.** `get_dev_holdout_split` exists, `--full-eval` already reports `training-dev` / `training-holdout` / `training-all` separately. Exactly as `logs/research_log.md`'s own July 30 entry two sessions up describes — I had read that entry and then told the user it wasn't started anyway.
+- **#21 (parallelism): also already done**, dated 2026-08-05, landed inside commit `236b5bf` — whose message was entirely about the library-learning probe. `run_full_evaluation_parallel` spreads all 1000 (or 120) tasks over a `multiprocessing.Pool`, `evaluate_split` uses it automatically whenever `PARALLEL_WORKERS = cpu_count - 1 > 1`. It doesn't fix #22 (module-level mutable state) — it sidesteps it, since separate OS processes each get an independent copy of the globals, so the thread-safety problem this project flagged never actually comes up. #22 stays open as a code-quality item, no longer a blocker.
+
+**Both capabilities sat implemented and undocumented as "done" for up to six days.** This is the third time this project has found real, already-built value sitting unadvertised (`by_color`/`no_background` on June 16, the relational subsystem on July 26, now this) — except this time the cost wasn't unused code, it was *my own incorrect summary to the user*, corrected only because I checked the code instead of trusting a doc I'd already read once. Fixed `docs/RESEARCH_AGENDA.md` in place (both items marked DONE with dates, "Suggested order" updated) rather than leaving the drift for the next session to rediscover.
+
+**Ran `--full-eval` fresh anyway**, since confirming the split and the parallel path actually work end-to-end is exactly what "do the fix" should produce even when the fix pre-exists. Result: 0 errors on both splits, accuracy unchanged — `training-dev` 60/750 (8.00%), `training-holdout` 12/250 (4.80%), `training-all` 72/1000 (7.20%), `evaluation` 0/120 (0.00%), induction precision 92% (training-all) / 91% (dev) / 100% (holdout). Tests: 48/48 (was 46 — also stale in `CLAUDE.md`, fixed).
+
+**The runtime from that run should not be trusted, and is logged rather than acted on.** Training took 5673s and evaluation took 6026s, against the documented clean baseline of ~900s / ~150s — 6.3x and 40x respectively. Both splits slowed down, which is the signature of machine contention (rule 7) rather than a code regression (which should hit one path, not both) — but a genuine contention story predicts *similar* multiplicative slowdown on both, and 6.3x vs 40x is not similar. Windows multiprocessing uses `spawn`, not `fork`, which re-imports every module (numpy, scipy, the whole solver) per worker process rather than sharing memory — a real, structural cost that plain environment noise doesn't produce, and evaluation's larger grids (**[measured elsewhere]** 3x the area, 2x the objects of training) would make that per-task import-and-pickle overhead worse specifically on the split that already looked disproportionate. Three candidate causes, one noisy run, no controlled comparison — recorded as open rather than diagnosed. **Do not write this run's wall-clock into `CLAUDE.md` as a new baseline.** If runtime work happens next, the first step is a controlled A/B on the same task subset with `PARALLEL_WORKERS=1` forced, on an otherwise idle machine.
+
+### Key insight
+
+**I repeated, in miniature, the exact failure `docs/VOCABULARY_PROPOSAL.md` and this log have both already named.** Told the user "none of these are started" about a list where two items were not only started but finished, one of them by me two sessions ago. The fix both times was the same: stop trusting a summary — including my own — and check the artifact (code, in this case; grids, in the correspondence test two sessions ago) directly before acting on it or reporting it.
+
+### Where this leaves the project
+
+```
+training-dev       750 tasks   60 solved   8.00%   precision  91%
+training-holdout   250 tasks   12 solved   4.80%   precision 100%
+training-all      1000 tasks   72 solved   7.20%   precision  92%
+evaluation         120 tasks    0 solved   0.00%
+```
+
+Both cheap methodological items from `docs/RESEARCH_AGENDA.md`'s "suggested order" are now done and documented as such. Next up per that list: **#3, template matching** — 90% of evaluation tasks contain repeated shapes and the solver has no concept of one. A runtime investigation (the paragraph above) is a plausible detour before that if the 6-40x swing turns out to matter for iteration speed, but it hasn't been scoped yet.
+
+## Session — August 5, 2026 (continued, solver audit)
+
+### What we did
+
+Asked to check selector induction, value induction, all-pair verification and the evaluation pipeline for correctness and report back — a straight code audit, not a measurement or a build. Read `induce_selectors`, `ColorExpr`/`VectorExpr`/`DecisionListExpr` and their induction functions, Draw's and Extract's form-based induction, the counterexample loop (`_refine_from`/`synthesize` in `synthesis.py`) and the sweep's own all-pairs check (`verify_hypothesis`/`verify_all` in `verifier.py`), and the whole scoring path in `solver.py`.
+
+**Found one real bug.** `_evaluate_one`, `run_full_evaluation` and `solve_all_tasks` each independently scored a task's predictions — which `solve_task` derives from `test[0]` only, by design — against **every** entry in `solutions[task_id]`, not just the one for `test[0]`. `solutions[task_id]` is one grid per test INPUT (confirmed structurally: training task `12997ef3` has two test inputs with differently-shaped solutions, `(12,3)` and `(3,12)`), not a set of acceptable alternate answers for a single input. A task with multiple test inputs could therefore be scored "correct" by a `test[0]`-derived guess coincidentally matching a *different* test input's answer, without the solver ever looking at that input.
+
+**Measured the actual damage before calling it urgent.** Ran all 69 multi-test-input training tasks directly and compared: **0 currently benefit from the leniency**, so `72/1000` was never inflated by it. But 41% of evaluation tasks have multiple test inputs against 7% of training (already-measured, `docs/RESEARCH_AGENDA.md` #19), so the exposure sits almost entirely on the split that counts, and the all-zero/copy-of-input fallback prediction is a plausible coincidental match against an unrelated same-shaped answer as the solver improves.
+
+**Fixed and deduped in the same change**, since the bug was the identical ~10-line loop copy-pasted three times, not three separate mistakes. Added `score_predictions(predictions, correct_outputs)` in `solver.py`, checking only `correct_outputs[0]`, and replaced all three call sites with it. 48/48 tests still pass (none of them had ever exercised multi-test-input scoring — confirmed by grep before writing the fix, which is also why this shipped unnoticed). Did not re-run the full evaluation to confirm the numbers are unchanged, because the argument is airtight without it: the new check only *removes* acceptances relative to the old one, training's removed acceptances were already measured at zero, and evaluation was already `0/120` under the strictly more permissive old logic, so it cannot have gone down. Smoke-tested the new code path directly on 5 multi-test-input tasks to confirm it runs clean end to end.
+
+### Key insight
+
+Two other things surfaced while reading, neither worth fixing on their own: a `finally: pass` in `synthesize_program` that does nothing — the real "only reset the active interpretation on failure" logic lives entirely in the control flow (return-inside-try vs. falling through), not in that block, so it's a landmine for whoever next assumes the finally clause is where cleanup happens; and `compatible()` in `synthesis.py` is defined but called from nowhere in the repo.
+
+The bug itself is a good example of the class of thing a single accuracy number cannot catch: it can only ever move the count in the generous direction, so a solver that's currently bad at everything (0/120 eval) will never show it — it would first appear as an unexplained jump the day the solver starts actually getting eval tasks right, which is exactly the moment a false signal would be most damaging to trust.
+
+### Where this leaves the project
+
+Fix is committed; `docs/RESEARCH_AGENDA.md` doesn't need a new entry since this was never on it — the review that found it wasn't chasing a documented flaw, it was reading code fresh. Worth remembering next time a session starts "what's the highest-value thing to do" purely from the agenda: an undirected read of core code found something the agenda-driven measurement work of the last week did not.
