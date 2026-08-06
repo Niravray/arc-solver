@@ -106,6 +106,30 @@ def _merge_predictions(candidates, test_input):
     return merged[:2]
 
 
+def score_predictions(predictions, correct_outputs):
+    """
+    Which attempt (1-indexed) matches the correct answer, or None.
+
+    Checks ONLY correct_outputs[0]. predictions are always derived from
+    test[0] (solve_task looks at nothing else), and correct_outputs is one
+    solution per TEST INPUT, not a set of acceptable alternates for a
+    single input -- solutions[task_id][1] is the answer to a different
+    grid entirely. Checking the full list credited a task as solved when
+    a test[0]-derived guess happened to match some other test input's
+    answer. Measured after the fact across all 69 multi-test-input
+    training tasks: 0 had actually been inflated by it, but 41% of
+    evaluation tasks (vs 7% of training) have more than one test input,
+    so the exposure was concentrated on the split that counts.
+    """
+    if not correct_outputs:
+        return None
+    target = correct_outputs[0]
+    for slot, pred in enumerate(predictions, start=1):
+        if np.array_equal(pred, target):
+            return slot
+    return None
+
+
 def solve_task(task):
     """
     Solve a single ARC task using both solvers.
@@ -195,14 +219,9 @@ def solve_all_tasks(tasks, task_ids, solutions=None, verbose=True):
         # Score if solutions available
         if solutions and task_id in solutions:
             correct_outputs = solutions[task_id]
-            for pred in predictions:
-                for correct_out in correct_outputs:
-                    if np.array_equal(pred, correct_out):
-                        results[task_id]["correct"] = True
-                        correct += 1
-                        break
-                if results[task_id]["correct"]:
-                    break
+            if score_predictions(predictions, correct_outputs) is not None:
+                results[task_id]["correct"] = True
+                correct += 1
 
         total += 1
 
@@ -476,19 +495,11 @@ def _evaluate_one(payload):
         record["duration_seconds"] = time.perf_counter() - started
         record["method"] = method
 
-        is_correct = False
-        if correct_outputs:
-            for slot, pred in enumerate(predictions, start=1):
-                for correct_out in correct_outputs:
-                    if np.array_equal(pred, correct_out):
-                        is_correct = True
-                        record["matched_attempt"] = slot
-                        break
-                if is_correct:
-                    break
-        record["correct"] = is_correct
+        matched_attempt = score_predictions(predictions, correct_outputs)
+        record["correct"] = matched_attempt is not None
+        record["matched_attempt"] = matched_attempt
 
-        if not is_correct:
+        if matched_attempt is None:
             try:
                 n_hyps, reason = _diagnose_failure(task, method)
                 record["hypotheses_tried"] = n_hyps
@@ -582,24 +593,16 @@ def run_full_evaluation(tasks, task_ids, solutions, progress_every=50):
             record["duration_seconds"] = time.perf_counter() - task_start
             record["method"] = method
 
+            # Which ATTEMPT matched is the attribution that matters: attempt
+            # 1 is the induced rule whenever synthesis produced one, so this
+            # is what separates the two solvers' credit rather than
+            # guessing from the method string.
             correct_outputs = solutions.get(task_id)
-            is_correct = False
-            if correct_outputs:
-                # Which ATTEMPT matched is the attribution that matters:
-                # attempt 1 is the induced rule whenever synthesis produced
-                # one, so this is what separates the two solvers' credit
-                # rather than guessing from the method string.
-                for slot, pred in enumerate(predictions, start=1):
-                    for correct_out in correct_outputs:
-                        if np.array_equal(pred, correct_out):
-                            is_correct = True
-                            record["matched_attempt"] = slot
-                            break
-                    if is_correct:
-                        break
-            record["correct"] = is_correct
+            matched_attempt = score_predictions(predictions, correct_outputs)
+            record["correct"] = matched_attempt is not None
+            record["matched_attempt"] = matched_attempt
 
-            if not is_correct:
+            if matched_attempt is None:
                 try:
                     n_hyps, reason = _diagnose_failure(task, method)
                     record["hypotheses_tried"] = n_hyps
