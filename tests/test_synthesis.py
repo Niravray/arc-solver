@@ -196,6 +196,25 @@ class ValueExpressionTests(unittest.TestCase):
             if kind != "literal":
                 self.assertGreater(cost, 0)
 
+    def test_container_colour_is_offered_when_it_explains_every_observation(self):
+        # A ring object containing a differently-coloured single pixel; the
+        # pixel's observed new colour is the ring's own colour.
+        g = grid(["55555", "50005", "50205", "50005", "55555"])
+        objs = scene_objects(g, 0)
+        inner = min(objs, key=lambda o: o["pixel_count"])
+        exprs = induce_color_exprs([(inner, objs, g, 0, 5)])
+        kinds = [e.kind for e, _ in exprs]
+        self.assertIn("from_container_color", kinds)
+
+    def test_container_colour_absent_without_a_containing_object(self):
+        # Same inner pixel, but nothing in the scene contains it -- the
+        # candidate must not be offered at all, not offered-and-wrong.
+        g = grid(["000", "020", "000"])
+        objs = scene_objects(g, 0)
+        exprs = induce_color_exprs([(objs[0], objs, g, 0, 5)])
+        kinds = [e.kind for e, _ in exprs]
+        self.assertNotIn("from_container_color", kinds)
+
     def test_geometric_decision_lists_require_symbolic_keys(self):
         # The Move overfit fix: offsets keyed on a measurement are
         # memorisation, so such a list must be refused outright.
@@ -285,6 +304,30 @@ class LoopTests(unittest.TestCase):
         ])
         program, _trace = synthesize(t, RECOLOR)
         self.assertIsNone(program)
+
+    def test_container_colour_survives_a_counterexample(self):
+        # Pair 1 alone is explained by the cheaper literal(5) -- the inner
+        # pixel's only observed target colour. Pair 2 uses a differently
+        # coloured ring around the SAME inner colour/size, disproving the
+        # literal and forcing re-induction onto from_container_color,
+        # which is the only candidate consistent with both.
+        t = task([
+            (["0000000", "0555550", "0500050", "0502050",
+              "0500050", "0555550", "0000000"],
+             ["0000000", "0555550", "0500050", "0505050",
+              "0500050", "0555550", "0000000"]),
+            (["0000000", "0777770", "0700070", "0702070",
+              "0700070", "0777770", "0000000"],
+             ["0000000", "0777770", "0700070", "0707070",
+              "0700070", "0777770", "0000000"]),
+        ])
+        program, trace = synthesize(t, RECOLOR)
+        self.assertIsNotNone(program, msg="\n".join(trace))
+        self.assertEqual(program.expr.kind, "from_container_color")
+        for pair in t["train"]:
+            got = program.apply(pair["input"],
+                                get_background_color(pair["input"]))
+            np.testing.assert_array_equal(got, pair["output"])
 
     def test_a_returned_rule_always_survives_the_final_check(self):
         # Whatever comes back must reproduce every training output; this is

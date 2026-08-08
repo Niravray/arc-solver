@@ -454,6 +454,34 @@ def induce_selectors(observed, max_conjunction=None, deadline=None):
 # table or a form validated against evidence, never a swept guess.
 # ============================================================
 
+def containing_object(obj, objs):
+    """
+    The smallest OTHER object whose bounding box strictly contains obj's.
+
+    Strict containment: same bbox does not count (that would make an
+    object its own container under equal-bbox ties). Smallest, not any
+    containing object, so a doubly-nested scene picks the immediate
+    parent rather than an outer ancestor -- the same tie-break
+    RELATIONAL_TARGET_SELECTORS uses elsewhere for "nearest".
+    """
+    own_bbox = (obj["min_row"], obj["max_row"], obj["min_col"], obj["max_col"])
+    candidates = []
+    for other in objs:
+        if other["id"] == obj["id"]:
+            continue
+        other_bbox = (other["min_row"], other["max_row"],
+                      other["min_col"], other["max_col"])
+        if other_bbox == own_bbox:
+            continue
+        if (other["min_row"] <= obj["min_row"] and other["max_row"] >= obj["max_row"]
+                and other["min_col"] <= obj["min_col"]
+                and other["max_col"] >= obj["max_col"]):
+            candidates.append(other)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda o: o["pixel_count"])
+
+
 class ColorExpr:
     """Recolor's second hole: what color does a selected object become?"""
 
@@ -472,11 +500,16 @@ class ColorExpr:
         if self.kind == "from_shape_count":
             k = sum(1 for x in objs if x["fingerprint"] == obj["fingerprint"])
             return self.table.get(k)
+        if self.kind == "from_container_color":
+            container = containing_object(obj, objs)
+            return container["color"] if container else None
         return None
 
     def __repr__(self):
         if self.kind == "literal":
             return f"color {self.value}"
+        if self.kind == "from_container_color":
+            return "colour of containing object"
         return f"{self.kind}{self.table}"
 
 
@@ -500,6 +533,19 @@ def induce_color_exprs(observations):
     new_colors = {payload for _, _, _, _, payload in observations}
     if len(new_colors) == 1:
         candidates.append((ColorExpr("literal", value=next(iter(new_colors))), 0))
+
+    # Structural, not memorized -- reads the scene at apply-time rather than
+    # storing a table, so it costs the same as VectorExpr's to_edge /
+    # until_collision (1) instead of a table's 100+len(table). Offered only
+    # if it reproduces EVERY observation exactly; a single miss (no
+    # container, or the wrong container's colour) drops it, same contract
+    # as every other candidate here.
+    if all(
+        (container := containing_object(obj, objs)) is not None
+        and container["color"] == payload
+        for obj, objs, _, _, payload in observations
+    ):
+        candidates.append((ColorExpr("from_container_color"), 1))
 
     def build_table(key_fn, kind):
         table = {}
