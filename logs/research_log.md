@@ -584,3 +584,32 @@ The bug itself is a good example of the class of thing a single accuracy number 
 ### Where this leaves the project
 
 Fix is committed; `docs/RESEARCH_AGENDA.md` doesn't need a new entry since this was never on it — the review that found it wasn't chasing a documented flaw, it was reading code fresh. Worth remembering next time a session starts "what's the highest-value thing to do" purely from the agenda: an undirected read of core code found something the agenda-driven measurement work of the last week did not.
+
+## Session — August 6, 2026: hand-reading the eval set for two-level rules, and where it led
+
+### What we did
+
+Went looking for the one hypothesis nothing had tested yet: the richer form of "two-level rules" `776ffc46` needed when it got dropped from the Extension D control — select a source by a derived property, read its content, apply that content elsewhere. Pre-registered a threshold (12 of 120, higher than Extensions B/D's 8, because this needs a new hole type plus an induction procedure rather than one more atom) and hand-read all 120 evaluation tasks cold, no automated detector, the same method that found `135a2760`/`28a6681f`/`dd6b8c4b`. Landed at **21 MATCH, 13 MAYBE** — the first result all week to clear its threshold.
+
+**Then verified the 5 highest-confidence calls with exact computed diffs instead of eyeballing grids, and it did not hold up.** `62593bfd` turned out to be four objects each doing a plain vertical Move to a new row — same shape, same colour, already-expressible, no content read at all. `b10624e5` turned out to be self-referential: each coloured block's own size determines two new same-sized blocks placed next to it, needing no separate source object. `16b78196` held up but was messier than described (several loose motifs merge into one composite, not a single shape-to-notch match). `7c66cb00` held up in spirit but the real mechanism was smaller and different: recolour to match your own containing region's colour. `e87109e9` stayed genuinely unresolved. **2 of 5 clearest calls collapsed outright.** Extrapolating that attrition rate across all 21 puts the honest count at roughly 8-13 — right on the pre-registered threshold, not comfortably above it. The raw 21 was a real overconfidence, most visible on exactly the ambiguous middle cases, which fits: three losses in a row create real pressure to finally find something that survives, and that pressure shows up on judgment calls, not the clear ones.
+
+**Built the one piece that survived verification anyway, to get a real number instead of another hand-estimate.** Added `from_container_color` to `synthesis.py`: a new `ColorExpr` kind reading the colour of the smallest object whose bounding box contains the selected one, structural (cost 1, no stored table) rather than memorised. Verified end-to-end on a constructed case first — two nested-ring/inner-pixel pairs where the inner pixel's own colour and size are identical across both pairs but the ring's colour differs, so `literal` and `from_color` are both mathematically impossible and only the container read can explain both. The counterexample loop behaved exactly as designed: induces the cheaper `literal(5)` from pair 1, pair 2 disproves it, re-induces onto `from_container_color`, final check passes. Added 3 tests (offer-when-explains, absent-without-a-container, the full loop case) — 51/51 passing.
+
+**Measured yield on the actual benchmark: exactly zero.** `7c66cb00` itself still doesn't solve — checked empirically before writing any code, not just predicted: no single scene interpretation gives one clean container per section across all four of its sections at once (`by_color` merges unrelated same-coloured regions across sections; `no_background` still splits each border into two disconnected strips). Full `--full-eval`: training-all 72/1000 (unchanged), evaluation 0/120 (unchanged), identical attribution and precision to the pre-change baseline in every field. A correctly-built, honestly-verified, zero-regression capability, measured with the same rigor as everything else this week, added nothing.
+
+### Key insight
+
+This closes the loop on the whole week rather than opening a new one. Four extensions now proposed, all four tested with real controls or real measurement, all four landing at 0-1 tasks or an outright zero: cells (0/32), symmetry (1/120), correspondence (1/120, at chance), and now two-level rules — the one candidate that survived its own falsification test still measured to nothing once actually built. The pattern is no longer "unlucky four times" — `VOCABULARY_PROPOSAL.md` Part 7 already named it: the benchmark is constructed so that no single concept covers many tasks. This session adds a sharper version of that finding: it isn't only that no single concept covers many tasks, it's that a correctly-verified, individually-real concept still covers **none**, because what's missing is either something structurally larger than any one addition, or a long tail of small, mutually unrelated capabilities of which this specific one wasn't a member for this particular 120-task set.
+
+Asked directly whether this architecture could reach 90%: no, and not as a fixable engineering gap. Two separate ceilings — ARC-AGI-2 is built to resist brute force and no system, symbolic or LLM-ensemble, is within reach of 90% on it; and this architecture specifically is a no-ML system whose entire language is "for each object, do X based on that object's own properties," which this week's evidence (three falsifications plus a correctly-built capability measuring to zero) shows cannot close a gap made of dozens of unrelated missing concepts through language extension alone.
+
+### Where this leaves the project
+
+```
+training-dev       750 tasks   60 solved   8.00%   precision  91%
+training-holdout   250 tasks   12 solved   4.80%   precision 100%
+training-all      1000 tasks   72 solved   7.20%   precision  92%
+evaluation         120 tasks    0 solved   0.00%
+```
+
+`from_container_color` stays in the language — it's cheap, structural, tested, and cost nothing in precision or runtime; there's no reason to gate it the way the genuinely harmful flags in `CLAUDE.md`'s table are gated, it simply isn't the piece that was missing. `docs/VOCABULARY_PROPOSAL.md` is not updated with this session's finding yet; worth doing before the next vocabulary-shaped idea gets proposed, so the pattern is visible in the document built to track exactly this pattern.
