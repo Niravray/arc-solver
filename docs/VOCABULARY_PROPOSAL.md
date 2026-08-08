@@ -534,3 +534,130 @@ missing value is. The gap Part 5 pointed at was real; it just doesn't
 cash out as "add relational atoms to selector induction." It cashes out
 as the derive-then-use chain itself, which no extension proposed here —
 A, B, C, or D — attempts to build.
+
+---
+
+## Part 9 — Extension E: two-level rules, the derive-then-use chain itself, tested
+
+Part 8 closed by naming exactly what was left untested: not correspondence
+as a selector, but the chain `776ffc46` actually needed — *select a
+source by a derived property, read its content, apply that content
+elsewhere*. This is that test.
+
+**Method, deliberately not automated first.** Every prior extension built
+a detector, then validated it on a hard hand-picked case. This one did the
+opposite on purpose: Part 5's own methodological note said the honest next
+step was to stop generating candidates from training intuition and read
+evaluation tasks directly, with no hypothesis in hand — the method that
+found `135a2760`, `28a6681f` and `dd6b8c4b`. So all 120 evaluation tasks
+were read cold, one at a time, no script.
+
+**Pre-registered before reading any task content:** MATCH ≥ 12 / 120 ⇒
+survives. Higher than A's and D's threshold of 8, deliberately: those
+were "add one atom to an existing hole," cheap to build. This needs a new
+HOLE TYPE (read-content-as-template isn't expressible by `ColorExpr` /
+`VectorExpr` / `DecisionListExpr` at all) plus a new induction procedure
+for it — a materially bigger build, so it needs a materially bigger
+signal to justify starting.
+
+**First-pass result: 21 MATCH, 13 MAYBE — the first count all week to
+clear its threshold.**
+
+**Then the verification pass, and this is the actual finding.** The 5
+highest-confidence MATCH calls were re-checked with exact computed cell
+diffs instead of eyeballing grids — the same discipline `_refine_from`
+itself uses (a rule only survives after checking, never after resembling).
+**2 of 5 collapsed outright:**
+
+| task | fast read | what the diff actually shows |
+|---|---|---|
+| `62593bfd` | key/content pairing replicates at a second key occurrence | four objects, each the exact same shape and colour, each doing a plain vertical Move to a new row. Already-expressible. No content read at all |
+| `b10624e5` | a motif found once stamped at several placeholders | each coloured block's own SIZE determines two new same-sized blocks placed beside it. Self-referential — needs no separate source object |
+| `16b78196` | shape matches a notch, gets stamped in | holds, but messier: several independent loose motifs merge into one composite stamp, not one shape matching one notch |
+| `7c66cb00` | a pattern from one section stamped into blank sections, recoloured to match | holds, but smaller: the real rule is "recolour to match your own containing region's colour" — one new value-expression kind, not a template engine |
+| `e87109e9` | legend positions stamped into several panels | one stripe traces to a real marker; a second has no source found. Left unresolved |
+
+Two of the five clearest calls were wrong, not merely imprecise. Extrapolating
+that attrition across the full 21 puts the honest count at roughly **8–13
+— at or near the pre-registered threshold, not comfortably above it.**
+The raw 21 was real overconfidence, concentrated exactly on the ambiguous
+middle judgment calls rather than the clear ones: three losses in a row
+(A, B v1, D) creates real pressure to finally find something that
+survives, and that pressure shows up as judgment drift, not as lying to
+oneself on the easy cases.
+
+**Built the one piece that survived verification, to replace a hand
+estimate with a real number.** `from_container_color`: a new `ColorExpr`
+kind reading the colour of the smallest object whose bounding box
+contains the selected one. Structural — cost 1, no stored table, same
+rank class as `VectorExpr`'s `to_edge`/`until_collision` — so it can only
+ever fill in where nothing cheaper already explains the evidence, never
+outrank a correct literal. Verified end-to-end first on a constructed
+case designed so `literal` and `from_color` are mathematically
+impossible (inner object's own colour and size identical across both
+pairs, only the container differs) and only the new kind can explain
+both; the counterexample loop behaved exactly as designed, inducing the
+cheaper `literal` from pair 1 and correctly re-inducing onto
+`from_container_color` once pair 2 disproves it.
+
+```
+CONTROL (constructed, container read is the only possible explanation)   PASSES
+7c66cb00 (the motivating example), checked empirically before building:
+  no single scene interpretation gives one clean container per section
+  across all four of its sections at once -- by_color merges unrelated
+  same-coloured regions across sections; no_background still splits each
+  border into two disconnected strips
+```
+
+**Evaluation result, full `--full-eval`, not a partial check:**
+
+```
+training-all   72 / 1000   (unchanged)
+evaluation      0 / 120    (unchanged)
+```
+
+Identical operator attribution and induction precision to the
+pre-change baseline in every field. Zero regressions, zero new solves,
+anywhere, including on `7c66cb00` itself.
+
+### RESULT: the hand-read survived its own threshold; the built capability did not survive contact with the benchmark.
+
+| device | validation | evaluation yield |
+|---|---|---|
+| cell-neighbourhood predicates (A) | 4/7 control | **0 / 32** |
+| symmetry & period completion (B v2) | hard case detected | **1 / 120** |
+| cross-object correspondence (D) | hard case detected | **1 / 120 (at chance)** |
+| two-level rules (E) — hand-read | none — corrected by re-verification | **≈8–13 / 120 (honest estimate)** |
+| two-level rules (E) — built (`from_container_color`) | constructed case, passes | **0 / 120** |
+
+**What this adds, past the four before it.** The first four extensions
+each failed the same way: a validated instrument, near-zero yield. This
+one failed a NEW way — the estimate itself was wrong before any code
+existed, caught only because verification was done with computed diffs
+rather than trusted on sight, and even the one piece that verification
+did confirm as real (`7c66cb00`'s "read your container's colour") still
+measured to nothing once built, for a reason no amount of hand-reading
+would have caught: the object model doesn't hold a clean container at
+the right granularity for that specific task's four sections
+simultaneously. Separability was never the whole story — Extension D's
+own "what is not claimed" said so — but this is the first time in this
+project that a claim survived its pre-registered threshold AND its
+positive-control-style build AND still yielded zero, which is a stronger
+and more specific failure than "the count was too low."
+
+**The pattern, five extensions in:**
+
+| extension | evaluation yield |
+|---|---|
+| A — cells | 0 / 32 |
+| B — regularity | 1 / 120 |
+| D — correspondence | 1 / 120, at chance |
+| E — two-level rules | 0 / 120, built and measured |
+
+Nothing tested this way has moved evaluation off zero. Not because the
+ideas were bad — `16b78196` and `7c66cb00`'s corrected mechanisms are
+both real, verified two-level phenomena — but because ARC-AGI-2's
+evaluation set does not appear to be missing ONE concept at any grain
+size tried so far, from a single relation up to a whole new hole type.
+The honest next question is no longer "which vocabulary extension" but
+whether vocabulary extension is the right shape of answer at all.
