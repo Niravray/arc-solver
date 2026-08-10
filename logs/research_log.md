@@ -613,3 +613,32 @@ evaluation         120 tasks    0 solved   0.00%
 ```
 
 `from_container_color` stays in the language — it's cheap, structural, tested, and cost nothing in precision or runtime; there's no reason to gate it the way the genuinely harmful flags in `CLAUDE.md`'s table are gated, it simply isn't the piece that was missing. `docs/VOCABULARY_PROPOSAL.md` is not updated with this session's finding yet; worth doing before the next vocabulary-shaped idea gets proposed, so the pattern is visible in the document built to track exactly this pattern.
+
+## Session — August 10, 2026: cross-operator cost ranking, another verified zero
+
+### What we did
+
+Asked directly whether this architecture could reach 90% (no — see the closing note two sessions up) and then to ideate on genuinely different reasoning strategies rather than another vocabulary extension. Landed on version-space algebra: instead of picking one hypothesis and testing it against the next pair, maintain the set of every hypothesis consistent with the evidence and narrow it as pairs arrive.
+
+Worked out what that means concretely for this codebase before writing anything, since "version-space algebra" as a textbook idea needed translating into this solver's actual structure. Two pieces of it turned out to already exist: `induce_selectors` already enumerates every depth-≤2 selector and filters to what's consistent with *all* evidence at once, and `_refine_from`'s counterexample loop already re-induces from the full accumulated evidence at every step rather than patching one hypothesis — both are why "more restarts" and "deeper conjunctions" measured to zero earlier this project: there was never a discarded alternative sitting around waiting to be found. The one place true version-space thinking was absent: `synthesize_program` tried each operator (Recolor, Move, Draw, Extract, every composed pair) in a fixed list order and returned on the *first* one that produced any complete rule, with no comparison against what a different operator might have found more cheaply.
+
+**Built it.** Threaded a comparable `induce_cost` through every one of the four `induce()` implementations (`Operator`, `DrawOperator`, `ExtractOperator`, `ComposedOperator` — the last of which had no internal ranking at all before this and now sums its two stages' costs, which also fixed it never sorting its own composed candidates). `synthesize_program` now collects every operator's result within an interpretation and returns the cheapest, only falling through to a later interpretation if nothing succeeded at all — preserving the existing "default interpretation costs nothing extra" design while fixing first-match-wins within whichever interpretation actually gets used. 51/51 tests still pass.
+
+**Measured: 72/1000 training, 0/120 evaluation — byte-identical attribution and precision to before the change.** Skipped the cheap pre-check I'd proposed (does any currently-solved task actually have a cheaper alternative sitting unused behind the one that won?) at explicit instruction, and the full run confirmed what that check would have shown for free: no task in this evidence had two operators competing for the same rule, so first-match-wins and cheapest-wins were never actually in disagreement here. The skipped measurement wasn't wasted effort avoided, it was signal deferred to a slower, more expensive channel.
+
+**Runtime note, not a claim.** This run — genuinely more work per task than any run all week, since nothing short-circuits on first success anymore — finished in 2236s training / 314s eval, the fastest full run this entire project has logged, well under the 5673-9542s range recent runs have shown. Consistent with (not proof of) the standing read that the multi-hour swings this project keeps hitting are machine contention, not code: more real work, less wall-clock, on the same machine, same week.
+
+### Key insight
+
+The change is real, tested, and correct — a rule no longer wins an operator competition just by being first in a list — and it is the second capability this week (after `from_container_color`) that is individually verified, individually justified, and individually worth exactly nothing on this benchmark. That is itself information: it says the operators this solver already has rarely genuinely compete for the same task. Most tasks that get solved have exactly one operator that can explain them at all — which lines up with `induce_selectors`' `all` being the winning selector in most solves (the July 30 log entry) and with `#15b`'s finding that selection does little work in most successful solves. The engine is not leaving cheap wins on the table by choosing badly between competing rules; when it fails, it fails because nothing in the language reaches the task at all, which is the same conclusion five different tests have now converged on from five different angles.
+
+### Where this leaves the project
+
+```
+training-dev       750 tasks   60 solved   8.00%   precision  91%
+training-holdout   250 tasks   12 solved   4.80%   precision 100%
+training-all      1000 tasks   72 solved   7.20%   precision  92%
+evaluation         120 tasks    0 solved   0.00%
+```
+
+Cross-operator ranking stays in the language for the same reason `from_container_color` did — correct, cheap, harms nothing — but it is not the lever. Two reasoning-algorithm ideas were raised this session; version-space algebra (this one) is spent. The other, treating "describe the structure, then describe the deviation" as the primary induction strategy rather than an add-on descriptor, has not been tried and remains open.
