@@ -1655,6 +1655,8 @@ class DrawOperator:
         candidates.extend(self._induce_per_object(observed))
         candidates.extend(self._induce_global(observed))
         candidates.sort(key=lambda pair: pair[0])
+        for cost, program in candidates:
+            program.induce_cost = cost
         return [program for _, program in candidates]
 
     def _induce_per_object(self, observed):
@@ -1906,6 +1908,8 @@ class ExtractOperator:
                                    ExtractProgram(selector, form_name)))
 
         candidates.sort(key=lambda pair: pair[0])
+        for cost, program in candidates:
+            program.induce_cost = cost
         return [program for _, program in candidates]
 
     def diagnose(self, program, input_grid, output_grid):
@@ -2041,7 +2045,10 @@ class Operator:
 
         if self.induce_expr is None:
             ranked = sorted(selectors, key=selector_cost)
-            return [self.program_cls(sel) for sel in ranked]
+            programs = [self.program_cls(sel) for sel in ranked]
+            for sel, program in zip(ranked, programs):
+                program.induce_cost = selector_cost(sel)
+            return programs
 
         observations = [
             (obj, objs, grid, background, payload)
@@ -2063,6 +2070,8 @@ class Operator:
                                self.program_cls(sel, decision_list)))
 
         scored.sort(key=lambda pair: pair[0])
+        for cost, program in scored:
+            program.induce_cost = cost
         return [program for _, program in scored]
 
     def diagnose(self, program, input_grid, output_grid):
@@ -2165,8 +2174,15 @@ class ComposedOperator:
             if all(np.array_equal(mid, out) for mid, out in residual):
                 continue
             for second_program in self.second.induce(residual)[:2]:
-                composed.append(ComposedProgram(first_program, second_program))
+                composed_program = ComposedProgram(first_program, second_program)
+                # Total description length is the sum of both stages' --
+                # each stage's induce() already attached its own cost.
+                composed_program.induce_cost = (
+                    first_program.induce_cost + second_program.induce_cost
+                )
+                composed.append(composed_program)
 
+        composed.sort(key=lambda program: program.induce_cost)
         return composed
 
     def diagnose(self, program, input_grid, output_grid):
@@ -2633,22 +2649,41 @@ def synthesize_program(task, operators=None):
     program must be applied to the test grid under the same reading of
     "object" it was induced under; applying it under the default would
     silently mean something different.
+
+    Within one interpretation, EVERY operator is tried to completion and
+    the cheapest resulting program wins -- not the first operator that
+    happens to produce anything. Every induce() implementation attaches
+    an `induce_cost` to each program it returns (same units Operator.induce
+    already ranked candidates by internally; ComposedOperator sums its two
+    stages' costs), so "cheapest" is directly comparable across Recolor,
+    Move, Draw, Extract and every composed pair. Previously the first
+    operator in OPERATORS' fixed list order to explain a task won by
+    default, even when a later operator would have found a shorter,
+    more general rule. This costs real runtime: nothing short-circuits
+    on the first success anymore, so a task that used to return after
+    one cheap operator now pays for all of them before deciding.
     """
     try:
         for interp_name, params in SCENE_INTERPRETATIONS:
             if not _interpretation_applies(interp_name, task):
                 continue
             set_scene_interpretation(params)
+            candidates = []
             for operator in (operators or OPERATORS):
                 try:
                     program, _ = synthesize(task, operator)
                 except Exception:
                     continue
                 if program is not None:
-                    name = operator.name
-                    if interp_name != SCENE_INTERPRETATIONS[0][0]:
-                        name = f"{name}@{interp_name}"
-                    return program, name
+                    candidates.append((operator, program))
+            if candidates:
+                operator, program = min(
+                    candidates, key=lambda pair: pair[1].induce_cost
+                )
+                name = operator.name
+                if interp_name != SCENE_INTERPRETATIONS[0][0]:
+                    name = f"{name}@{interp_name}"
+                return program, name
     except Exception:
         pass
     finally:
