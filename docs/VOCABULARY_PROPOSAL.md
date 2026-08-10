@@ -661,3 +661,91 @@ evaluation set does not appear to be missing ONE concept at any grain
 size tried so far, from a single relation up to a whole new hole type.
 The honest next question is no longer "which vocabulary extension" but
 whether vocabulary extension is the right shape of answer at all.
+
+---
+
+## Part 10 — Extension F: motif repetition count, falsified clean
+
+Between this and Part 9, one non-vocabulary idea was tried and is worth
+naming even though it doesn't belong in this document's table: version-
+space algebra, reframing `synthesize_program`'s operator loop from
+"first operator to produce a complete rule wins" to "cheapest rule
+across every operator wins." Correct, tested, shipped — and, measured on
+the full benchmark, worth zero additional solves on either split. It's a
+search/ranking change, not a new atom or hole type, so it sits outside
+what this document tracks; recorded here only so the thread isn't lost.
+Full account in `logs/research_log.md`, the August 10 session.
+
+Extension F returns to this document's actual subject: the narrowest
+honest slice of "structure-first reasoning" (Part 2's description-first
+idea, never yet tried as the *primary* induction strategy rather than an
+add-on descriptor). Building the general machinery — a description
+grammar, a cost model to rank competing descriptions, Extension C's
+whole unbuilt ambition — is a large, unscoped commitment. Tested the
+cheapest falsifiable piece of it first instead.
+
+**The hypothesis:** does the transformation consist of a repeated
+motif's COUNT changing between input and output — `RESEARCH_AGENDA.md`
+#2 (counting) intersected with #3 (motif repetition, 90% prevalence,
+the largest structural signal never directly tested).
+
+**Pre-registered before reading any task content:** MATCH requires all
+three — (1) a motif occurring 2+ times in the input, a genuine
+repetition; (2) the transformation referencing that count directly, not
+merely coexisting with repeated shapes; (3) count-change as the PRIMARY
+mechanism, not incidental to periodicity-repair (B), select-source/
+apply-elsewhere (E), or an already-expressible single-object property
+like `is_largest`. Threshold 8/120, matched to B and D's scale rather
+than E's 12 — one candidate value-expression kind, not a new hole type.
+
+Learning directly from Part 9's overcorrection, the verification
+discipline was built into the process from the start this time rather
+than bolted on after a fast read proved overconfident: re-check the
+highest-confidence calls with computed diffs *before* reporting any
+count. Hand-read all 120 cold, reusing the same rendered grids as
+Part 9 (identical data, fresh judgment for a different question).
+
+```
+STRICT MATCH (registered hypothesis)                       0 / 120
+Near-misses, deliberately excluded per the criteria         2
+  7b5033c1  a colour's diagonal segment LENGTH determines
+            its repeat-count in a column output
+  89565ca0  several distinct single regions, each region's
+            own length driving its own output row
+```
+
+### RESULT: FALSIFIED, cleanly. No verification pass was needed — there was nothing to verify.
+
+Both near-misses are genuine counting signals — an object's own SIZE
+driving output construction — but neither has a motif whose REPEAT-COUNT
+changes, which is specifically what was being tested. Applying the
+pre-registered criteria literally instead of loosening them to rescue
+two plausible-looking cases kept the zero honest, and it locates the
+real gap more precisely than a padded count would have: the solver can
+already read `pixel_count`, it simply has no output-construction
+mechanism — nothing like "repeat this N times" — to spend that
+measurement on. That is a real, narrow, differently-shaped gap from
+"motif repetition count," left open rather than folded into this
+result.
+
+**The pattern, six tests in, five of them vocabulary extensions proper:**
+
+| extension | evaluation yield |
+|---|---|
+| A — cells | 0 / 32 |
+| B — regularity | 1 / 120 |
+| D — correspondence | 1 / 120, at chance |
+| E — two-level rules | 0 / 120, built and measured |
+| (cross-operator ranking — not a vocabulary extension) | 0 / 120, built and measured |
+| F — motif repetition count | 0 / 120, no ambiguity |
+
+Five vocabulary extensions, five clean-or-corrected-to-clean negatives,
+at every grain size tried: a single cell predicate, a regional
+regularity, a cross-object relation, an entire new hole type, one narrow
+value-expression kind. F is the first that needed no correction at all
+— not a near-threshold estimate revised down, not a built capability
+undercut by a granularity mismatch discovered after the fact, just zero,
+on the first honest count. That is the cleanest evidence yet for Part 9's
+closing line: the question is no longer which vocabulary extension, but
+whether vocabulary extension — at any grain size — is the right shape of
+answer.
