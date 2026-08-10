@@ -642,3 +642,30 @@ evaluation         120 tasks    0 solved   0.00%
 ```
 
 Cross-operator ranking stays in the language for the same reason `from_container_color` did — correct, cheap, harms nothing — but it is not the lever. Two reasoning-algorithm ideas were raised this session; version-space algebra (this one) is spent. The other, treating "describe the structure, then describe the deviation" as the primary induction strategy rather than an add-on descriptor, has not been tried and remains open.
+
+## Session — August 11, 2026: motif-count, the narrowest slice of "structure-first," falsified clean
+
+### What we did
+
+Picked up the open thread from the "structure-first reasoning" idea: rather than build the general machinery (a description grammar, a cost model to choose between competing descriptions — Extension C's whole unbuilt ambition), tested its narrowest honest slice first. Does the transformation consist of a repeated motif's COUNT changing between input and output — `RESEARCH_AGENDA.md` #2 (counting) intersected with #3 (motif repetition, the largest unmeasured structural signal, 90% prevalence)?
+
+Pre-registered before reading anything: MATCH requires (1) a motif occurring 2+ times in the input, (2) the transformation referencing that count directly (a copy added/removed, the count encoded as output size/pattern), (3) count-change as the *primary* mechanism, not incidental to periodicity-repair (Extension B), select-source/apply-elsewhere (Extension E), or an already-expressible single-object property. Threshold 8/120, matched to B and D's scale rather than E's 12 — this is one candidate value-expression kind, not a new hole type. Also pre-registered, learning directly from last session's mistake: verify the top 5 confident calls with computed diffs *before* reporting any count, built into the process from the start rather than added reactively after the fact.
+
+Hand-read all 120 cold, reusing the same rendered dump from the two-level-rules session (same grids, no bias introduced by reuse) but a genuinely fresh judgment pass for this specific question.
+
+**Result: 0 of 120.** Clean, unambiguous, no verification pass needed — there was nothing to verify. Two tasks came close and were deliberately excluded under the pre-registered criteria rather than counted: `7b5033c1` (a colour's diagonal segment *length* determines its repeat-count in a column output) and `89565ca0` (several distinct single regions, each region's own length driving its own output row). Both are genuine counting signals — reading an object's own size and using it to construct output structure — but neither has a motif occurring 2+ times whose count changes; both are single-object SIZE, which `pixel_count` already exposes, not repeat-count. Applying the criteria strictly rather than loosening them to catch two near-misses was the right call: it keeps the zero honest and it locates the *real* gap more precisely than a padded count would have — the solver can already read an object's own size, it just has no output-construction mechanism (something like "repeat N times") to spend that measurement on.
+
+### Key insight
+
+Five extensions now tested this way, five different grain sizes, five clean negatives: cells (0/32), whole-grid then regional symmetry (1/120), correspondence (1/120, at chance), two-level rules (0/120, actually built and measured), motif-count (0/120, no ambiguity at all). This is the first of the five where the falsification needed no correction and no hedging — the pre-registered criteria, applied literally, simply didn't find anything, including two plausible-looking near-misses that a less disciplined read might have folded in to rescue the hypothesis.
+
+### Where this leaves the project
+
+```
+training-dev       750 tasks   60 solved   8.00%   precision  91%
+training-holdout   250 tasks   12 solved   4.80%   precision 100%
+training-all      1000 tasks   72 solved   7.20%   precision  92%
+evaluation         120 tasks    0 solved   0.00%
+```
+
+No code changed this session — pure measurement, and a fast one, because the question was narrow and the answer was unambiguous. The other reasoning-algorithm idea from two sessions back ("describe the structure, then describe the deviation" as the primary induction strategy, not an add-on) is still open and still the more structurally different of the two candidates raised. `docs/VOCABULARY_PROPOSAL.md` does not yet have a Part 10 for this result; worth adding before the next vocabulary-shaped idea gets proposed, same reasoning as the note two sessions up that still hasn't been acted on either.
